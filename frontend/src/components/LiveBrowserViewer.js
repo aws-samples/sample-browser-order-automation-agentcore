@@ -20,6 +20,7 @@ const LiveBrowserViewer = ({ orderId }) => {
   const [authToken, setAuthToken] = useState('');
   const [dcvLoaded, setDcvLoaded] = useState(false);
   const [connection, setConnection] = useState(null);
+  const [currentResolution, setCurrentResolution] = useState('900p'); // Default to 1600x900
   const authRef = useRef(null);
   const dcvViewerRef = useRef(null);
   const connectionRef = useRef(null);
@@ -219,16 +220,44 @@ const LiveBrowserViewer = ({ orderId }) => {
         displayLayout: (serverWidth, serverHeight, heads) => {
           console.log(`[LiveBrowserViewer] Display layout callback: ${serverWidth}x${serverHeight}`);
           const display = document.getElementById('dcv-display');
+          
           if (display) {
-            display.style.width = '1600px';
-            display.style.height = '900px';
+            // Let DCV SDK handle the sizing - just ensure container fills available space
+            display.style.width = '100%';
+            display.style.height = '100%';
+            display.style.transform = 'none';
+            display.style.transformOrigin = 'initial';
+            
+            console.log(`[LiveBrowserViewer] Set display to fill container, server size: ${serverWidth}x${serverHeight}`);
           }
         },
         firstFrame: () => {
           console.log('[LiveBrowserViewer] First frame received!');
-          setAuthenticated(true);
-          setLoading(false);
-          setError(null);
+          
+          // Request display layout again after first frame
+          if (connectionRef.current && connectionRef.current.requestDisplayLayout) {
+            const resolutions = {
+              '720p': { width: 1280, height: 720 },
+              '900p': { width: 1600, height: 900 },
+              '1080p': { width: 1920, height: 1080 },
+              '1440p': { width: 2560, height: 1440 }
+            };
+            const resolution = resolutions[currentResolution];
+            console.log(`[LiveBrowserViewer] Requesting display layout after first frame: ${resolution.width}x${resolution.height}`);
+            
+            setTimeout(() => {
+              connectionRef.current.requestDisplayLayout([{
+                name: "Main Display",
+                rect: {
+                  x: 0,
+                  y: 0,
+                  width: resolution.width,
+                  height: resolution.height
+                },
+                primary: true
+              }]);
+            }, 1000); // Wait 1 second after first frame
+          }
         },
         error: (error) => {
           console.error('[LiveBrowserViewer] Connection error:', error);
@@ -245,17 +274,65 @@ const LiveBrowserViewer = ({ orderId }) => {
         console.log('[LiveBrowserViewer] Connection established:', connection);
         connectionRef.current = connection;
         setConnection(connection);
-        setSessionId(sessionId);
-        setAuthToken(authToken);
-        setAuthenticated(true);
-        setLoading(false);
+        
+        // Request display layout based on current resolution - multiple attempts
+        if (connection && connection.requestDisplayLayout) {
+          const resolutions = {
+            '720p': { width: 1280, height: 720 },
+            '900p': { width: 1600, height: 900 },
+            '1080p': { width: 1920, height: 1080 },
+            '1440p': { width: 2560, height: 1440 }
+          };
+          const resolution = resolutions[currentResolution];
+          console.log(`[LiveBrowserViewer] Requesting initial display layout: ${resolution.width}x${resolution.height}`);
+          
+          // Request immediately
+          connection.requestDisplayLayout([{
+            name: "Main Display",
+            rect: {
+              x: 0,
+              y: 0,
+              width: resolution.width,
+              height: resolution.height
+            },
+            primary: true
+          }]);
+          
+          // Request again after a short delay
+          setTimeout(() => {
+            connection.requestDisplayLayout([{
+              name: "Main Display",
+              rect: {
+                x: 0,
+                y: 0,
+                width: resolution.width,
+                height: resolution.height
+              },
+              primary: true
+            }]);
+          }, 500);
+          
+          // And once more after 2 seconds
+          setTimeout(() => {
+            connection.requestDisplayLayout([{
+              name: "Main Display",
+              rect: {
+                x: 0,
+                y: 0,
+                width: resolution.width,
+                height: resolution.height
+              },
+              primary: true
+            }]);
+          }, 2000);
+        }
       })
       .catch(error => {
         console.error('[LiveBrowserViewer] Connect failed:', error);
         setError(`Connection failed: ${error.message || error}`);
         setLoading(false);
       });
-  }, []);
+  }, [currentResolution]);
 
   const startAndConnect = useCallback(async () => {
     if (!orderId) return;
@@ -315,6 +392,8 @@ const LiveBrowserViewer = ({ orderId }) => {
       // Follow simple_browser_viewer.py pattern: authenticate first, then connect
       console.log('Starting DCV authentication...');
       
+      let authSuccessful = false; // Flag to track successful authentication
+      
       authRef.current = window.dcv.authenticate(presignedUrl, {
         promptCredentials: (authType, callback) => {
           console.log('Credentials prompted:', authType);
@@ -322,6 +401,12 @@ const LiveBrowserViewer = ({ orderId }) => {
           callback(null, null);
         },
         error: (auth, error) => {
+          // Ignore error if authentication was already successful
+          if (authSuccessful) {
+            console.log('Ignoring error callback after successful authentication:', error);
+            return;
+          }
+          
           console.error('Authentication failed:', error);
           
           let errorMessage = 'Unknown authentication error';
@@ -344,14 +429,24 @@ const LiveBrowserViewer = ({ orderId }) => {
         },
         success: (auth, result) => {
           console.log('Authentication successful:', result);
+          authSuccessful = true; // Mark authentication as successful
           
           if (result && result[0]) {
             const { sessionId: authSessionId, authToken: authAuthToken } = result[0];
             console.log('Session ID:', authSessionId);
             console.log('Auth token received:', authAuthToken ? 'Yes' : 'No');
             
-            // Now call connectToSession like in Python code
-            connectToSession(presignedUrl, authSessionId, authAuthToken);
+            // First update UI state to render dcv-display element
+            setSessionId(authSessionId);
+            setAuthToken(authAuthToken);
+            setAuthenticated(true);
+            setLoading(false);
+            setError(null);
+            
+            // Then wait for DOM to update and connect
+            setTimeout(() => {
+              connectToSession(presignedUrl, authSessionId, authAuthToken);
+            }, 100);
             
           } else {
             console.error('No session data in auth result');
@@ -371,7 +466,7 @@ const LiveBrowserViewer = ({ orderId }) => {
       setError(`Failed to start connection: ${err.message}`);
       setLoading(false);
     }
-  }, [orderId]);
+  }, [connectToSession, orderId]);
 
   // Start connection when DCV is loaded and we have an order ID
   useEffect(() => {
@@ -431,8 +526,31 @@ const LiveBrowserViewer = ({ orderId }) => {
             action={
               <Button
                 variant="primary"
-                onClick={() => {
+                onClick={async () => {
+                  setLoading(true);
                   setError(null);
+                  
+                  // If connection limit error, try to force disconnect existing sessions
+                  if (isConnectionLimitError) {
+                    try {
+                      console.log('Attempting to force disconnect existing sessions...');
+                      const disconnectResponse = await fetch(`/api/orders/${orderId}/force-disconnect`, {
+                        method: 'POST'
+                      });
+                      
+                      if (disconnectResponse.ok) {
+                        const disconnectData = await disconnectResponse.json();
+                        console.log('Force disconnect result:', disconnectData);
+                        
+                        // Wait a moment for cleanup
+                        await new Promise(resolve => setTimeout(resolve, 1000));
+                      }
+                    } catch (disconnectError) {
+                      console.warn('Failed to force disconnect:', disconnectError);
+                    }
+                  }
+                  
+                  // Reset state and retry
                   setAuthenticated(false);
                   setConnection(null);
                   connectionRef.current = null;
@@ -440,7 +558,7 @@ const LiveBrowserViewer = ({ orderId }) => {
                   startAndConnect();
                 }}
               >
-                Retry Connection
+                {isConnectionLimitError ? 'Force Disconnect & Retry' : 'Retry Connection'}
               </Button>
             }
           >
@@ -474,8 +592,108 @@ const LiveBrowserViewer = ({ orderId }) => {
       >
         <SpaceBetween direction="vertical" size="m">
           <StatusIndicator type="success">
-            Connected to live view (Session: {sessionId.substring(0, 8)}...)
+            Connected to live view (Session: {sessionId ? sessionId.substring(0, 12) : 'Unknown'})
           </StatusIndicator>
+          
+          {/* Resolution Control */}
+          <Box>
+            <div style={{ 
+              display: 'flex', 
+              alignItems: 'center', 
+              gap: '15px',
+              padding: '10px',
+              backgroundColor: '#f9f9f9',
+              borderRadius: '8px',
+              border: '1px solid #e1e1e1'
+            }}>
+              <span style={{ fontSize: '14px', fontWeight: '500', color: '#333' }}>Display Size:</span>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                {[
+                  { text: '720p', id: '720p', full: '1280×720' },
+                  { text: '900p', id: '900p', full: '1600×900' },
+                  { text: '1080p', id: '1080p', full: '1920×1080' },
+                  { text: '1440p', id: '1440p', full: '2560×1440' }
+                ].map((item) => (
+                  <Button
+                    key={item.id}
+                    variant={currentResolution === item.id ? 'primary' : 'normal'}
+                    size="small"
+                    onClick={async () => {
+                      const resolutions = {
+                        '720p': { width: 1280, height: 720 },
+                        '900p': { width: 1600, height: 900 },
+                        '1080p': { width: 1920, height: 1080 },
+                        '1440p': { width: 2560, height: 1440 }
+                      };
+                      const resolution = resolutions[item.id];
+                      if (resolution && connectionRef.current) {
+                        console.log(`[LiveBrowserViewer] Changing resolution to: ${resolution.width}x${resolution.height}`);
+                        setCurrentResolution(item.id);
+                        
+                        try {
+                          // First, change the actual browser resolution via backend API
+                          console.log(`[LiveBrowserViewer] Calling backend API to change browser resolution...`);
+                          const response = await fetch(`/api/orders/${orderId}/change-resolution`, {
+                            method: 'POST',
+                            headers: {
+                              'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({
+                              width: resolution.width,
+                              height: resolution.height
+                            })
+                          });
+                          
+                          if (response.ok) {
+                            const result = await response.json();
+                            console.log(`[LiveBrowserViewer] Browser resolution changed successfully:`, result);
+                            
+                            // Wait a moment for the browser to resize
+                            await new Promise(resolve => setTimeout(resolve, 1000));
+                          } else {
+                            const error = await response.json();
+                            console.warn(`[LiveBrowserViewer] Failed to change browser resolution:`, error);
+                          }
+                        } catch (error) {
+                          console.warn(`[LiveBrowserViewer] Error calling resolution API:`, error);
+                        }
+                        
+                        // Then, request new DCV display layout
+                        connectionRef.current.requestDisplayLayout([{
+                          name: "Main Display",
+                          rect: {
+                            x: 0,
+                            y: 0,
+                            width: resolution.width,
+                            height: resolution.height
+                          },
+                          primary: true
+                        }]);
+                        
+                        // Also update container size dynamically
+                        const container = document.querySelector('[data-dcv-container]');
+                        if (container) {
+                          // Calculate aspect ratio and set appropriate container height
+                          const aspectRatio = resolution.height / resolution.width;
+                          const containerWidth = container.clientWidth;
+                          const newHeight = Math.min(containerWidth * aspectRatio, 1000); // Max 1000px height
+                          container.style.height = `${newHeight}px`;
+                        }
+                      }
+                    }}
+                    title={item.full}
+                  >
+                    {item.text}
+                  </Button>
+                ))}
+              </div>
+              <span style={{ fontSize: '12px', color: '#666', marginLeft: 'auto' }}>
+                Current: {currentResolution === '720p' ? '1280×720' : 
+                         currentResolution === '900p' ? '1600×900' : 
+                         currentResolution === '1080p' ? '1920×1080' : '2560×1440'}
+              </span>
+            </div>
+          </Box>
           <Box>
             {connection.mock ? (
               // Development mode display
@@ -508,16 +726,29 @@ const LiveBrowserViewer = ({ orderId }) => {
             ) : (
               // Real DCV display
               <div
-                id="dcv-display"
-                ref={dcvViewerRef}
+                data-dcv-container
                 style={{
                   width: '100%',
-                  height: '600px',
+                  height: '900px',  // Initial height, will be adjusted dynamically
                   border: '1px solid #ddd',
                   borderRadius: '4px',
-                  backgroundColor: '#000'
+                  backgroundColor: '#000',
+                  position: 'relative',
+                  overflow: 'hidden'
                 }}
-              />
+              >
+                <div
+                  id="dcv-display"
+                  ref={dcvViewerRef}
+                  style={{
+                    width: '100%',
+                    height: '100%',
+                    position: 'absolute',
+                    top: 0,
+                    left: 0
+                  }}
+                />
+              </div>
             )}
           </Box>
         </SpaceBetween>

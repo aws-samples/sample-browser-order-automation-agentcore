@@ -18,22 +18,23 @@ from services.live_view_service import get_live_view_service
 
 console = Console()
 
+
 class SimpleBrowserViewer:
     """Simple browser viewer for testing live view functionality"""
-    
+
     def __init__(self, order_id: str, port: int = 8001):
         self.order_id = order_id
         self.port = port
         self.app = FastAPI(title="Simple Browser Viewer")
         self.server_thread = None
         self.is_running = False
-        
+
         # Setup routes
         self._setup_routes()
-    
+
     def _setup_routes(self):
         """Setup FastAPI routes"""
-        
+
         @self.app.get("/", response_class=HTMLResponse)
         async def root():
             """Serve the main viewer page"""
@@ -41,34 +42,40 @@ class SimpleBrowserViewer:
                 # Get live view service
                 config = {"agentcore_region": "us-west-2"}
                 live_view_service = get_live_view_service(config, None)
-                
+
                 # Get or create session for order
                 session_id = live_view_service.get_session_for_order(self.order_id)
                 if not session_id:
                     session_id = live_view_service.create_live_session(
                         self.order_id, "strands_playwright_mcp"
                     )
-                
+
                 if not session_id:
-                    raise HTTPException(status_code=500, detail="Failed to create live session")
-                
+                    raise HTTPException(
+                        status_code=500, detail="Failed to create live session"
+                    )
+
                 # Get presigned URL
-                presigned_url = live_view_service.get_presigned_url(session_id, expires=300)
-                
+                presigned_url = live_view_service.get_presigned_url(
+                    session_id, expires=300
+                )
+
                 if not presigned_url:
-                    raise HTTPException(status_code=500, detail="Failed to generate presigned URL")
-                
+                    raise HTTPException(
+                        status_code=500, detail="Failed to generate presigned URL"
+                    )
+
                 # Generate HTML
                 html = self._generate_html(presigned_url, session_id)
                 return HTMLResponse(content=html)
-                
+
             except Exception as e:
                 console.print(f"[red]Error: {str(e)}[/red]")
                 raise HTTPException(status_code=500, detail=str(e))
-    
+
     def _generate_html(self, presigned_url: str, session_id: str) -> str:
         """Generate simple viewer HTML"""
-        return f'''
+        return f"""
         <!DOCTYPE html>
         <html lang="en">
         <head>
@@ -173,54 +180,58 @@ class SimpleBrowserViewer:
             </script>
         </body>
         </html>
-        '''
-    
+        """
+
     def start(self, open_browser: bool = True) -> str:
         """Start the viewer server"""
+
         def run_server():
             uvicorn.run(self.app, host="0.0.0.0", port=self.port, log_level="error")
-        
+
         self.server_thread = threading.Thread(target=run_server, daemon=True)
         self.server_thread.start()
         self.is_running = True
-        
+
         time.sleep(1)
         viewer_url = f"http://localhost:{self.port}"
-        
+
         console.print(f"\n[green]✅ Simple viewer running at: {viewer_url}[/green]")
-        
+
         if open_browser:
             console.print("[cyan]Opening browser...[/cyan]")
             webbrowser.open(viewer_url)
-        
+
         return viewer_url
+
 
 def main():
     """Run the simple browser viewer"""
     console.print("[bold cyan]Simple Browser Viewer Test[/bold cyan]\n")
-    
+
     try:
         # Use a test order ID
         order_id = "test-order-123"
-        
+
         console.print(f"[cyan]Testing with order ID: {order_id}[/cyan]")
-        
+
         # Create and start viewer
         viewer = SimpleBrowserViewer(order_id, port=8001)
         viewer_url = viewer.start(open_browser=True)
-        
+
         console.print("\n[yellow]Press Ctrl+C to stop[/yellow]")
-        
+
         # Keep running
         while True:
             time.sleep(1)
-            
+
     except KeyboardInterrupt:
         console.print("\n\n[yellow]Shutting down...[/yellow]")
     except Exception as e:
         console.print(f"\n[red]Error: {e}[/red]")
         import traceback
+
         traceback.print_exc()
+
 
 if __name__ == "__main__":
     main()

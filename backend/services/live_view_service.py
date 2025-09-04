@@ -55,6 +55,7 @@ class LiveViewService:
     def create_live_session(self, order_id: str, automation_method: str) -> Optional[str]:
         """
         Create a new live view session for an order.
+        This will try to reuse the existing Agent's browser session if available.
         Returns session_id if successful, None if failed.
         """
         try:
@@ -66,35 +67,66 @@ class LiveViewService:
                     existing_session.last_accessed = datetime.now(timezone.utc)
                     return existing_session.session_id
 
-            # Create new AgentCore session
+            # Try to get the existing browser session from the Agent
+            agentcore_client = None
+            agentcore_session = None
             session_id = f"live_{order_id}_{int(datetime.now().timestamp())}"
             
             logger.info(f"Creating new live view session {session_id} for order {order_id}")
             
-            # Initialize AgentCore browser session
-            region = self.config.get("agentcore_region", "us-west-2")
-            
+            # First, try to get existing browser session from Agent
             try:
-                agentcore_session = browser_session(region)
-                agentcore_client = agentcore_session.__enter__()
+                from agentcore_manager import get_agentcore_manager
+                agentcore_manager = get_agentcore_manager(self.db_manager)
                 
-                if not agentcore_client:
-                    raise Exception("AgentCore client is None after initialization")
+                # Try to find session by order_id first
+                agent_session_id = agentcore_manager.get_session_by_order(order_id)
+                if agent_session_id:
+                    agentcore_client = agentcore_manager.get_client(agent_session_id)
+                    if agentcore_client:
+                        logger.info(f"Successfully reused Agent's browser session: {agent_session_id} for order: {order_id}")
+                        # Use the existing session without creating a new context
+                        agentcore_session = None  # We don't own this session
+                        session_id = f"live_{order_id}_{agent_session_id}"  # Include agent session ID
+                    else:
+                        logger.warning(f"Agent session {agent_session_id} found but client is None")
+                else:
+                    logger.info(f"No Agent browser session found for order: {order_id}")
+                            
+            except Exception as e:
+                logger.warning(f"Could not reuse Agent's browser session: {e}")
+            
+            # If we couldn't reuse Agent's session, create a new one
+            if not agentcore_client:
+                logger.info("Creating new AgentCore browser session for live view")
+                region = self.config.get("agentcore_region", "us-west-2")
                 
-                # Create live session record
-                live_session = LiveViewSession(
-                    session_id=session_id,
-                    order_id=order_id,
-                    automation_method=automation_method,
-                    agentcore_client=agentcore_client,
-                    agentcore_session=agentcore_session,
-                    status="active",
-                    created_at=datetime.now(timezone.utc),
-                    last_accessed=datetime.now(timezone.utc)
-                )
-                
-                with self.session_lock:
-                    self.active_sessions[session_id] = live_session
+                try:
+                    agentcore_session = browser_session(region)
+                    agentcore_client = agentcore_session.__enter__()
+                    
+                    if not agentcore_client:
+                        raise Exception("AgentCore client is None after initialization")
+                        
+                    logger.info("Created new AgentCore browser session")
+                except Exception as e:
+                    logger.error(f"Failed to create new AgentCore session: {e}")
+                    raise
+            
+            # Create live session record
+            live_session = LiveViewSession(
+                session_id=session_id,
+                order_id=order_id,
+                automation_method=automation_method,
+                agentcore_client=agentcore_client,
+                agentcore_session=agentcore_session,  # None if reusing Agent's session
+                status="active",
+                created_at=datetime.now(timezone.utc),
+                last_accessed=datetime.now(timezone.utc)
+            )
+            
+            with self.session_lock:
+                self.active_sessions[session_id] = live_session
                 
                 # Update database with session info
                 if self.db_manager:
@@ -110,15 +142,11 @@ class LiveViewService:
                     except Exception as db_error:
                         logger.warning(f"Failed to update order with session_id: {db_error}")
                 
-                logger.info(f"Successfully created live view session {session_id}")
-                return session_id
+            logger.info(f"Successfully created live view session {session_id}")
+            return session_id
                 
-            except Exception as agentcore_error:
-                logger.error(f"Failed to initialize AgentCore session: {agentcore_error}")
-                return None
-                
-        except Exception as e:
-            logger.error(f"Failed to create live session for order {order_id}: {e}")
+        except Exception as agentcore_error:
+            logger.error(f"Failed to initialize AgentCore session: {agentcore_error}")
             return None
 
     def get_presigned_url(self, session_id: str, expires: int = 300) -> Optional[str]:
@@ -232,6 +260,159 @@ class LiveViewService:
         except Exception as e:
             logger.error(f"Error terminating session {session_id}: {e}")
             return False
+
+    def change_browser_resolution(self, session_id: str, width: int, height: int) -> Dict[str, Any]:
+        """
+        Change the browser resolution for a live view session.
+        """
+        try:
+            with self.session_lock:
+                live_session = self.active_sessions.get(session_id)
+                
+                if not live_session:
+                    return {
+                        "success": False,
+                        "error": f"Session {session_id} not found"
+                    }
+                
+                if live_session.status != "active":
+                    return {
+                        "success": False,
+                        "error": f"Session {session_id} is not active (status: {live_session.status})"
+                    }
+                
+                # Change browser resolution using AgentCore client
+                try:
+                    if hasattr(live_session.agentcore_client, 'set_viewport_size'):
+                        live_session.agentcore_client.set_viewport_size(width, height)
+                        logger.info(f"Changed browser resolution to {width}x{height} for session {session_id}")
+                    elif hasattr(live_session.agentcore_client, 'set_window_size'):
+                        live_session.agentcore_client.set_window_size(width, height)
+                        logger.info(f"Changed browser window size to {width}x{height} for session {session_id}")
+                    else:
+                        # Try to execute JavaScript to change viewport
+                        js_code = f"""
+                        // Change viewport size
+                        if (window.screen && window.screen.width !== {width}) {{
+                            // Try to resize window if possible
+                            if (window.resizeTo) {{
+                                window.resizeTo({width}, {height});
+                            }}
+                            // Set viewport meta tag
+                            let viewport = document.querySelector('meta[name="viewport"]');
+                            if (!viewport) {{
+                                viewport = document.createElement('meta');
+                                viewport.name = 'viewport';
+                                document.head.appendChild(viewport);
+                            }}
+                            viewport.content = 'width={width}, height={height}, initial-scale=1.0';
+                        }}
+                        """
+                        
+                        if hasattr(live_session.agentcore_client, 'execute_script'):
+                            live_session.agentcore_client.execute_script(js_code)
+                            logger.info(f"Executed viewport change script for session {session_id}")
+                        else:
+                            logger.warning(f"No method available to change resolution for session {session_id}")
+                            return {
+                                "success": False,
+                                "error": "Browser resolution change not supported by current client"
+                            }
+                    
+                    return {
+                        "success": True,
+                        "message": f"Browser resolution changed to {width}x{height}",
+                        "width": width,
+                        "height": height
+                    }
+                    
+                except Exception as resize_error:
+                    logger.error(f"Error changing browser resolution for session {session_id}: {resize_error}")
+                    return {
+                        "success": False,
+                        "error": f"Failed to change browser resolution: {str(resize_error)}"
+                    }
+                    
+        except Exception as e:
+            logger.error(f"Error in change_browser_resolution for session {session_id}: {e}")
+            return {
+                "success": False,
+                "error": f"Internal error: {str(e)}"
+            }
+
+    def focus_active_tab(self, session_id: str) -> Dict[str, Any]:
+        """
+        Focus on the currently active tab in the browser session.
+        This helps ensure DCV shows the tab that Agent is working on.
+        """
+        try:
+            with self.session_lock:
+                live_session = self.active_sessions.get(session_id)
+                
+                if not live_session:
+                    return {
+                        "success": False,
+                        "error": f"Session {session_id} not found"
+                    }
+                
+                if live_session.status != "active":
+                    return {
+                        "success": False,
+                        "error": f"Session {session_id} is not active (status: {live_session.status})"
+                    }
+                
+                # Try to focus on the active tab
+                try:
+                    # Method 1: Try to get current page and bring it to front
+                    if hasattr(live_session.agentcore_client, 'get_current_page'):
+                        current_page = live_session.agentcore_client.get_current_page()
+                        if current_page and hasattr(current_page, 'bring_to_front'):
+                            current_page.bring_to_front()
+                            logger.info(f"Brought current page to front for session {session_id}")
+                    
+                    # Method 2: Execute JavaScript to focus window
+                    js_focus_code = """
+                    // Focus current window and tab
+                    if (window.focus) {
+                        window.focus();
+                    }
+                    // Scroll to top to ensure visibility
+                    window.scrollTo(0, 0);
+                    // Dispatch focus event
+                    window.dispatchEvent(new Event('focus'));
+                    """
+                    
+                    if hasattr(live_session.agentcore_client, 'execute_script'):
+                        live_session.agentcore_client.execute_script(js_focus_code)
+                        logger.info(f"Executed focus script for session {session_id}")
+                    
+                    # Method 3: Try CDP commands if available
+                    if hasattr(live_session.agentcore_client, 'send_cdp_command'):
+                        try:
+                            # Bring page to front using CDP
+                            live_session.agentcore_client.send_cdp_command('Page.bringToFront', {})
+                            logger.info(f"Sent CDP bringToFront command for session {session_id}")
+                        except Exception as cdp_error:
+                            logger.warning(f"CDP bringToFront failed: {cdp_error}")
+                    
+                    return {
+                        "success": True,
+                        "message": f"Focused active tab for session {session_id}"
+                    }
+                    
+                except Exception as focus_error:
+                    logger.error(f"Error focusing active tab for session {session_id}: {focus_error}")
+                    return {
+                        "success": False,
+                        "error": f"Failed to focus active tab: {str(focus_error)}"
+                    }
+                    
+        except Exception as e:
+            logger.error(f"Error in focus_active_tab for session {session_id}: {e}")
+            return {
+                "success": False,
+                "error": f"Internal error: {str(e)}"
+            }
 
     def get_session_for_order(self, order_id: str) -> Optional[str]:
         """

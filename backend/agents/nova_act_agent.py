@@ -138,6 +138,27 @@ class NovaActAgent:
             # Store CDP info for Nova Act initialization
             self.ws_url = ws_url
             self.headers = headers
+            
+            # Register browser session with AgentCore Manager for Live View sharing
+            try:
+                from agentcore_manager import get_agentcore_manager
+                # Get database manager if available
+                db_manager = getattr(self, 'db_manager', None)
+                agentcore_manager = get_agentcore_manager(db_manager)
+                
+                agentcore_manager.register_session(
+                    session_id=session_id,
+                    agentcore_client=self.agentcore_client,
+                    order_id=None,  # Will be set when processing an order
+                    metadata={
+                        'automation_method': 'nova_act',
+                        'ws_url': ws_url,
+                        'created_at': datetime.now().isoformat()
+                    }
+                )
+                logger.info(f"Registered browser session {session_id} with AgentCore Manager")
+            except Exception as e:
+                logger.warning(f"Failed to register browser session with AgentCore Manager: {e}")
 
             # Initialize Nova Act with AgentCore
             self.nova_session = NovaAct(
@@ -195,6 +216,28 @@ class NovaActAgent:
                 f"Starting order processing for {order.product_name}",
                 "initialization",
             )
+            
+            # Update AgentCore Manager with order_id for Live View sharing
+            try:
+                from agentcore_manager import get_agentcore_manager
+                db_manager = getattr(self, 'db_manager', None)
+                agentcore_manager = get_agentcore_manager(db_manager)
+                
+                if hasattr(self, 'session_id'):
+                    # Re-register with order_id (this will update the database)
+                    agentcore_manager.register_session(
+                        session_id=self.session_id,
+                        agentcore_client=self.agentcore_client,
+                        order_id=order_id,
+                        metadata={
+                            'automation_method': 'nova_act',
+                            'ws_url': getattr(self, 'ws_url', ''),
+                            'created_at': datetime.now().isoformat()
+                        }
+                    )
+                    logger.info(f"Updated AgentCore session {self.session_id} with order_id: {order_id}")
+            except Exception as e:
+                logger.warning(f"Failed to update AgentCore Manager with order_id: {e}")
 
             # Set up session replay for this order if available
             if hasattr(self, 'session_replay_config') and self.session_replay_config.get('enabled'):

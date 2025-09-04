@@ -570,6 +570,131 @@ async def list_live_sessions():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/orders/{order_id}/force-disconnect")
+async def force_disconnect_live_session(order_id: str):
+    """Force disconnect existing live view session for an order"""
+    try:
+        from services.live_view_service import get_live_view_service
+        
+        # Get default config for service access
+        config = config_manager.get_automation_config("strands_playwright_mcp")
+        if not config:
+            raise HTTPException(status_code=500, detail="Configuration not available")
+        
+        live_view_service = get_live_view_service(config, db_manager)
+        
+        # Find existing session for this order
+        existing_session_id = live_view_service.get_session_for_order(order_id)
+        
+        if existing_session_id:
+            # Terminate the existing session
+            success = live_view_service.terminate_session(existing_session_id)
+            if success:
+                logger.info(f"Force disconnected live session {existing_session_id} for order {order_id}")
+                return {
+                    "success": True,
+                    "message": f"Disconnected existing session {existing_session_id}",
+                    "session_id": existing_session_id
+                }
+            else:
+                raise HTTPException(status_code=500, detail="Failed to terminate existing session")
+        else:
+            return {
+                "success": True,
+                "message": "No active session found to disconnect",
+                "session_id": None
+            }
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to force disconnect session for order {order_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/orders/{order_id}/change-resolution")
+async def change_browser_resolution(order_id: str, request: dict):
+    """Change browser resolution for live view session"""
+    try:
+        from services.live_view_service import get_live_view_service
+        from services.config_manager import config_manager
+        
+        # Validate request
+        if "width" not in request or "height" not in request:
+            raise HTTPException(status_code=400, detail="Width and height are required")
+        
+        width = int(request["width"])
+        height = int(request["height"])
+        
+        # Validate resolution values
+        if width < 640 or width > 3840 or height < 480 or height > 2160:
+            raise HTTPException(status_code=400, detail="Invalid resolution. Width: 640-3840, Height: 480-2160")
+        
+        config = config_manager.get_automation_config("strands_playwright_mcp")
+        if not config:
+            raise HTTPException(status_code=500, detail="Configuration not available")
+        
+        live_view_service = get_live_view_service(config, db_manager)
+        
+        # Find existing session for this order
+        session_id = live_view_service.get_session_for_order(order_id)
+        
+        if not session_id:
+            raise HTTPException(status_code=404, detail="No active live view session found for this order")
+        
+        # Change browser resolution
+        result = live_view_service.change_browser_resolution(session_id, width, height)
+        
+        if result["success"]:
+            logger.info(f"Changed browser resolution to {width}x{height} for order {order_id}")
+            return result
+        else:
+            raise HTTPException(status_code=500, detail=result["error"])
+            
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid width or height: {str(e)}")
+    except Exception as e:
+        logger.error(f"Failed to change browser resolution for order {order_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/orders/{order_id}/focus-tab")
+async def focus_active_tab(order_id: str):
+    """Focus on the active tab for live view session"""
+    try:
+        from services.live_view_service import get_live_view_service
+        from services.config_manager import config_manager
+        
+        config = config_manager.get_automation_config("strands_playwright_mcp")
+        if not config:
+            raise HTTPException(status_code=500, detail="Configuration not available")
+        
+        live_view_service = get_live_view_service(config, db_manager)
+        
+        # Find existing session for this order
+        session_id = live_view_service.get_session_for_order(order_id)
+        
+        if not session_id:
+            raise HTTPException(status_code=404, detail="No active live view session found for this order")
+        
+        # Focus active tab
+        result = live_view_service.focus_active_tab(session_id)
+        
+        if result["success"]:
+            logger.info(f"Focused active tab for order {order_id}")
+            return result
+        else:
+            raise HTTPException(status_code=500, detail=result["error"])
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to focus active tab for order {order_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/live-view/sessions/{session_id}/status")
 async def get_live_session_status(session_id: str):
     """Get status of a specific live view session"""
