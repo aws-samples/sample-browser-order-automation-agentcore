@@ -1,0 +1,23 @@
+{
+  "retailer": "test-retailer",
+  "automation_method": "strands_playwright_mcp",
+  "product": {
+    "url": "https://example.com/product",
+    "name": "Test Product",
+    "quantity": 1,
+    "price": 10.0
+  },
+  "customer_name": "Test User",
+  "customer_email": "test@example.com",
+  "shipping_address": {
+    "first_name": "Test",
+    "last_name": "User",
+    "address_line_1": "123 Test St",
+    "city": "Test City",
+    "state": "TS",
+    "postal_code": "12345",
+    "country": "US"
+  },
+  "priority": "normal",
+  "instructions": "Test live view functionality"
+}

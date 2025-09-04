@@ -1,0 +1,44 @@
+# Project Configuration
+project_name = "timecard-processor"
+environment  = "prod"
+aws_region   = "us-west-2"
+
+# Custom domain (ACM certificate will be created automatically)
+# domain_name = "timecard.yourdomain.com"
+
+# Whether to create ACM certificate automatically
+# create_certificate = true
+
+# Network Configuration
+vpc_cidr           = "10.0.0.0/16"
+availability_zones = ["us-west-2a", "us-west-2b"]
+
+# ECS Configuration
+ecs_task_cpu      = 1024  # 1 vCPU (increased from 512)
+ecs_task_memory   = 2048  # 2GB RAM (increased from 1024)
+ecs_desired_count = 1     # 1 task (reduced to avoid rate limiting)
+ecs_min_capacity  = 1     # Min 1 task
+ecs_max_capacity  = 10     # Max 3 tasks (reduced from 15)
+
+# Auto Scaling
+enable_auto_scaling = true
+
+# CloudFront Configuration
+cloudfront_price_class = "PriceClass_100"
+
+# Database Configuration - Upgraded for better performance
+db_instance_class           = "db.t3.small"  # Upgraded from micro to small
+db_allocated_storage        = 50             # Increased from 20GB to 50GB
+db_max_allocated_storage    = 200            # Increased from 100GB to 200GB
+db_name                     = "timecard_processor"
+db_username                 = "postgres"
+db_backup_retention_period  = 7
+db_multi_az                 = false
+
+# Tags
+tags = {
+  Project     = "timecard-processor"
+  Environment = "prod"
+  ManagedBy   = "terraform"
+  Owner       = "your-team"
+}

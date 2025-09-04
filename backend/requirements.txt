@@ -1,0 +1,60 @@
+# Core Framework
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.5.0
+python-multipart>=0.0.6
+
+# Strands Agents SDK
+strands-agents>=1.6.0
+strands-agents-tools>=0.2.5
+
+# AWS & Bedrock
+boto3>=1.34.0
+botocore>=1.34.0
+bedrock-agentcore>=1.0.0
+
+# LLM Providers
+anthropic>=0.7.0
+
+# Browser Automation
+playwright>=1.40.0
+
+# MCP (Model Context Protocol)
+mcp>=1.11.0
+
+# HTTP Client (compatible with MCP requirements)
+httpx>=0.27.0
+
+# Database
+sqlalchemy>=2.0.23
+psycopg2-binary>=2.9.9
+alembic>=1.13.0
+
+# WebSocket & Real-time
+websockets>=12.0
+python-socketio>=5.10.0
+
+# Image Processing (for thumbnails)
+Pillow>=10.1.0
+opencv-python>=4.8.1.78
+
+# Utilities
+python-dotenv>=1.0.0
+pydantic-settings>=2.1.0
+aiofiles>=23.2.1
+python-jose[cryptography]>=3.3.0
+
+# Monitoring & Logging
+structlog>=23.2.0
+rich>=13.7.0
+
+# Testing
+pytest>=7.4.3
+pytest-asyncio>=0.21.1
+pytest-mock>=3.12.0
+
+# Development
+black>=23.11.0
+isort>=5.12.0
+flake8>=6.1.0
+mypy>=1.7.1
