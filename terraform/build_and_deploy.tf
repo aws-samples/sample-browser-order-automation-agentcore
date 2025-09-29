@@ -6,7 +6,7 @@ data "aws_region" "current" {}
 resource "null_resource" "docker_build_push" {
   triggers = {
     dockerfile_hash = filemd5("../Dockerfile")
-    backend_hash    = sha256(join("", [for f in fileset("../backend", "**") : filesha256("../backend/${f}")]))
+    backend_hash    = sha256(join("", [for f in fileset("../backend", "**") : filesha256("../backend/${f}") if !can(regex("\\.(db|sqlite|sqlite3)$", f))]))
   }
 
   provisioner "local-exec" {

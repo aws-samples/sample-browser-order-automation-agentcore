@@ -26,6 +26,12 @@ venv/
 env/
 ENV/
 
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+order_automation.db
+
 # AgentCore Browser
 browser_sessions/
 screenshots/
