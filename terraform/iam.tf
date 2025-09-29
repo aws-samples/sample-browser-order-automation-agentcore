@@ -52,6 +52,7 @@ resource "aws_iam_role_policy" "ecs_task" {
     Version = "2012-10-17"
     Statement = [
       {
+        Sid = "BedrockModelInvocation"
         Effect = "Allow"
         Action = [
           "bedrock:InvokeModel",
@@ -69,36 +70,148 @@ resource "aws_iam_role_policy" "ecs_task" {
         ]
       },
       {
+        Sid = "BedrockAgentCoreFullAccess"
         Effect = "Allow"
         Action = [
-          "s3:GetObject",
-          "s3:PutObject",
-          "s3:DeleteObject",
-          "s3:ListBucket",
-          "s3:ListAllMyBuckets",
-          "s3:GetBucketLocation"
+          "bedrock-agentcore:*"
+        ]
+        Resource = "*"
+      },
+      {
+        Sid = "BedrockAgentCoreControlFullAccess"
+        Effect = "Allow"
+        Action = [
+          "bedrock-agentcore-control:*"
+        ]
+        Resource = "*"
+      },
+      {
+        Sid = "BedrockAgentCoreWorkloadAccess"
+        Effect = "Allow"
+        Action = [
+          "bedrock-agentcore:GetWorkloadAccessToken",
+          "bedrock-agentcore:GetWorkloadAccessTokenForJWT",
+          "bedrock-agentcore:GetWorkloadAccessTokenForUserId"
+        ]
+        Resource = [
+          "arn:aws:bedrock-agentcore:${var.aws_region}:${data.aws_caller_identity.current.account_id}:workload-identity-directory/default",
+          "arn:aws:bedrock-agentcore:${var.aws_region}:${data.aws_caller_identity.current.account_id}:workload-identity-directory/default/workload-identity/*"
+        ]
+      },
+      {
+        Sid = "S3FullAccess"
+        Effect = "Allow"
+        Action = [
+          "s3:*"
         ]
         Resource = [
           aws_s3_bucket.app_data.arn,
           "${aws_s3_bucket.app_data.arn}/*",
           aws_s3_bucket.static_assets.arn,
           "${aws_s3_bucket.static_assets.arn}/*",
-          "*"
+          "arn:aws:s3:::bedrock-agentcore-*",
+          "arn:aws:s3:::bedrock-agentcore-*/*",
+          "arn:aws:s3:::sanghwa-oregon",
+          "arn:aws:s3:::sanghwa-oregon/*"
         ]
       },
       {
+        Sid = "IAMRoleManagement"
         Effect = "Allow"
         Action = [
-          "iam:AssumeRole",
+          "iam:CreateRole",
+          "iam:DeleteRole",
           "iam:GetRole",
-          "iam:ListRoles",
+          "iam:PutRolePolicy",
+          "iam:DeleteRolePolicy",
+          "iam:AttachRolePolicy",
+          "iam:DetachRolePolicy",
+          "iam:TagRole",
           "iam:ListRolePolicies",
-          "iam:GetRolePolicy",
+          "iam:ListAttachedRolePolicies",
+          "iam:ListRoles",
+          "iam:PassRole",
           "sts:AssumeRole"
         ]
         Resource = "*"
       },
       {
+        Sid = "CloudWatchLogsAccess"
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents",
+          "logs:DescribeLogGroups",
+          "logs:DescribeLogStreams",
+          "logs:GetLogEvents"
+        ]
+        Resource = [
+          "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/bedrock-agentcore/*",
+          "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/codebuild/*",
+          "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:*"
+        ]
+      },
+      {
+        Sid = "ECRAccess"
+        Effect = "Allow"
+        Action = [
+          "ecr:CreateRepository",
+          "ecr:DescribeRepositories",
+          "ecr:GetRepositoryPolicy",
+          "ecr:InitiateLayerUpload",
+          "ecr:CompleteLayerUpload",
+          "ecr:PutImage",
+          "ecr:UploadLayerPart",
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:GetDownloadUrlForLayer",
+          "ecr:BatchGetImage",
+          "ecr:ListImages",
+          "ecr:TagResource",
+          "ecr:GetAuthorizationToken"
+        ]
+        Resource = "*"
+      },
+      {
+        Sid = "CodeBuildAccess"
+        Effect = "Allow"
+        Action = [
+          "codebuild:StartBuild",
+          "codebuild:BatchGetBuilds",
+          "codebuild:ListBuildsForProject",
+          "codebuild:CreateProject",
+          "codebuild:UpdateProject",
+          "codebuild:BatchGetProjects",
+          "codebuild:ListProjects"
+        ]
+        Resource = "*"
+      },
+      {
+        Sid = "XRayAccess"
+        Effect = "Allow"
+        Action = [
+          "xray:PutTraceSegments",
+          "xray:PutTelemetryRecords",
+          "xray:GetSamplingRules",
+          "xray:GetSamplingTargets"
+        ]
+        Resource = "*"
+      },
+      {
+        Sid = "CloudWatchMetrics"
+        Effect = "Allow"
+        Action = [
+          "cloudwatch:PutMetricData"
+        ]
+        Resource = "*"
+        Condition = {
+          StringEquals = {
+            "cloudwatch:namespace" = "bedrock-agentcore"
+          }
+        }
+      },
+      {
+        Sid = "BedrockGuardrailsAndPolicies"
         Effect = "Allow"
         Action = [
           "bedrock:CreateAutomatedReasoningPolicy",
@@ -107,26 +220,172 @@ resource "aws_iam_role_policy" "ecs_task" {
           "bedrock:ExportAutomatedReasoningPolicyVersion",
           "bedrock:StartAutomatedReasoningPolicyBuildWorkflow",
           "bedrock:GetAutomatedReasoningPolicyBuildWorkflow",
-          "bedrock:InvokeAutomatedReasoningPolicy"
-        ]
-        Resource = "*"
-      },
-      {
-        Effect = "Allow"
-        Action = [
+          "bedrock:InvokeAutomatedReasoningPolicy",
           "bedrock:CreateGuardrail",
           "bedrock:GetGuardrail",
           "bedrock:ListGuardrails",
           "bedrock:ApplyGuardrail"
         ]
         Resource = "*"
+      }
+    ]
+  })
+}
+
+# Bedrock AgentCore Execution Role
+resource "aws_iam_role" "bedrock_agentcore_execution" {
+  name = "BedrockAgentCoreRole"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid = "AssumeRolePolicy"
+        Effect = "Allow"
+        Principal = {
+          Service = "bedrock-agentcore.amazonaws.com"
+        }
+        Action = "sts:AssumeRole"
+        Condition = {
+          StringEquals = {
+            "aws:SourceAccount" = data.aws_caller_identity.current.account_id
+          }
+          ArnLike = {
+            "aws:SourceArn" = "arn:aws:bedrock-agentcore:${var.aws_region}:${data.aws_caller_identity.current.account_id}:*"
+          }
+        }
       },
       {
+        Sid = "AllowECSTaskRole"
+        Effect = "Allow"
+        Principal = {
+          AWS = aws_iam_role.ecs_task.arn
+        }
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+
+  tags = var.tags
+}
+
+# Bedrock AgentCore Execution Role Policy
+resource "aws_iam_role_policy" "bedrock_agentcore_execution" {
+  name = "BedrockAgentCoreBrowserPolicy"
+  role = aws_iam_role.bedrock_agentcore_execution.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid = "BedrockAgentCoreInBuiltToolsFullAccess"
         Effect = "Allow"
         Action = [
-          "bedrock-agentcore:*"
+          "bedrock-agentcore:CreateBrowser",
+          "bedrock-agentcore:ListBrowsers",
+          "bedrock-agentcore:GetBrowser",
+          "bedrock-agentcore:DeleteBrowser",
+          "bedrock-agentcore:StartBrowserSession",
+          "bedrock-agentcore:ListBrowserSessions",
+          "bedrock-agentcore:GetBrowserSession",
+          "bedrock-agentcore:StopBrowserSession",
+          "bedrock-agentcore:UpdateBrowserStream",
+          "bedrock-agentcore:ConnectBrowserAutomationStream",
+          "bedrock-agentcore:ConnectBrowserLiveViewStream"
+        ]
+        Resource = [
+          "arn:aws:bedrock-agentcore:${var.aws_region}:${data.aws_caller_identity.current.account_id}:browser/*",
+          "arn:aws:bedrock-agentcore:${var.aws_region}:${data.aws_caller_identity.current.account_id}:browser-custom/*"
+        ]
+      },
+      {
+        Sid = "BedrockAgentCoreBuiltInToolsS3Policy"
+        Effect = "Allow"
+        Action = [
+          "s3:PutObject",
+          "s3:ListMultipartUploadParts",
+          "s3:AbortMultipartUpload"
+        ]
+        Resource = "arn:aws:s3:::sanghwa-oregon/*"
+        Condition = {
+          StringEquals = {
+            "aws:ResourceAccount" = data.aws_caller_identity.current.account_id
+          }
+        }
+      },
+      {
+        Sid = "ECRImageAccess"
+        Effect = "Allow"
+        Action = [
+          "ecr:BatchGetImage",
+          "ecr:GetDownloadUrlForLayer",
+          "ecr:GetAuthorizationToken"
         ]
         Resource = "*"
+      },
+      {
+        Sid = "CloudWatchLogsAccess"
+        Effect = "Allow"
+        Action = [
+          "logs:DescribeLogStreams",
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents",
+          "logs:DescribeLogGroups"
+        ]
+        Resource = [
+          "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/bedrock-agentcore/runtimes/*",
+          "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:*"
+        ]
+      },
+      {
+        Sid = "XRayAccess"
+        Effect = "Allow"
+        Action = [
+          "xray:PutTraceSegments",
+          "xray:PutTelemetryRecords",
+          "xray:GetSamplingRules",
+          "xray:GetSamplingTargets"
+        ]
+        Resource = "*"
+      },
+      {
+        Sid = "CloudWatchMetrics"
+        Effect = "Allow"
+        Action = [
+          "cloudwatch:PutMetricData"
+        ]
+        Resource = "*"
+        Condition = {
+          StringEquals = {
+            "cloudwatch:namespace" = "bedrock-agentcore"
+          }
+        }
+      },
+      {
+        Sid = "GetAgentAccessToken"
+        Effect = "Allow"
+        Action = [
+          "bedrock-agentcore:GetWorkloadAccessToken",
+          "bedrock-agentcore:GetWorkloadAccessTokenForJWT",
+          "bedrock-agentcore:GetWorkloadAccessTokenForUserId"
+        ]
+        Resource = [
+          "arn:aws:bedrock-agentcore:${var.aws_region}:${data.aws_caller_identity.current.account_id}:workload-identity-directory/default",
+          "arn:aws:bedrock-agentcore:${var.aws_region}:${data.aws_caller_identity.current.account_id}:workload-identity-directory/default/workload-identity/*"
+        ]
+      },
+      {
+        Sid = "BedrockModelInvocation"
+        Effect = "Allow"
+        Action = [
+          "bedrock:InvokeModel",
+          "bedrock:InvokeModelWithResponseStream"
+        ]
+        Resource = [
+          "arn:aws:bedrock:*::foundation-model/*",
+          "arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:*"
+        ]
       }
     ]
   })
@@ -151,6 +410,12 @@ resource "aws_iam_role" "ecs_auto_scaling" {
   })
 
   tags = var.tags
+}
+
+# Output the BedrockAgentCoreRole ARN for use in application configuration
+output "bedrock_agentcore_role_arn" {
+  description = "ARN of the Bedrock AgentCore execution role"
+  value       = aws_iam_role.bedrock_agentcore_execution.arn
 }
 
 # Note: AmazonECSServiceRolePolicy is deprecated and no longer needed for ECS auto scaling

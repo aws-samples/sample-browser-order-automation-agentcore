@@ -1,3 +1,31 @@
+# CloudFront Function for shop redirect
+resource "aws_cloudfront_function" "shop_redirect" {
+  name    = "${var.project_name}-shop-redirect"
+  runtime = "cloudfront-js-1.0"
+  comment = "Redirect /shop to /shop/index.html"
+  publish = true
+  code    = <<-EOT
+function handler(event) {
+    var request = event.request;
+    var uri = request.uri;
+    
+    // Redirect /shop to /shop/index.html
+    if (uri === '/shop' || uri === '/shop/') {
+        var response = {
+            statusCode: 301,
+            statusDescription: 'Moved Permanently',
+            headers: {
+                'location': { value: '/shop/index.html' }
+            }
+        };
+        return response;
+    }
+    
+    return request;
+}
+EOT
+}
+
 # CloudFront Origin Access Control
 resource "aws_cloudfront_origin_access_control" "static_assets" {
   name                              = "${var.project_name}-static-assets-oac"
@@ -63,6 +91,33 @@ resource "aws_cloudfront_distribution" "main" {
     compress               = false
   }
 
+  # Shop behavior - redirect /shop to /shop/index.html
+  # Temporarily commented out to fix CloudFront deployment issue
+  # ordered_cache_behavior {
+  #   path_pattern     = "/shop/*"
+  #   allowed_methods  = ["GET", "HEAD"]
+  #   cached_methods   = ["GET", "HEAD"]
+  #   target_origin_id = "S3-${aws_s3_bucket.static_assets.bucket}"
+
+  #   forwarded_values {
+  #     query_string = false
+  #     cookies {
+  #       forward = "none"
+  #     }
+  #   }
+
+  #   viewer_protocol_policy = "redirect-to-https"
+  #   min_ttl                = 0
+  #   default_ttl            = 3600
+  #   max_ttl                = 86400
+  #   compress               = true
+
+  #   function_association {
+  #     event_type   = "viewer-request"
+  #     function_arn = aws_cloudfront_function.shop_redirect.arn
+  #   }
+  # }
+
   # API behavior
   ordered_cache_behavior {
     path_pattern     = "/api/*"
@@ -105,6 +160,11 @@ resource "aws_cloudfront_distribution" "main" {
     min_ttl     = 0
     default_ttl = 86400
     max_ttl     = 31536000
+
+    function_association {
+      event_type   = "viewer-request"
+      function_arn = aws_cloudfront_function.shop_redirect.arn
+    }
   }
 
   # Custom error responses for SPA

@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Checkout - ShopZone</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Amazon Ember', Arial, sans-serif;
+            background-color: #f5f5f5;
+        }
+        
+        .header {
+            background-color: #232F3E;
+            color: white;
+            padding: 8px 0;
+        }
+        
+        .header-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            align-items: center;
+            padding: 0 16px;
+        }
+        
+        .logo {
+            font-size: 24px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        
+        .checkout-steps {
+            background-color: white;
+            padding: 16px 0;
+            border-bottom: 1px solid #ddd;
+        }
+        
+        .steps-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 16px;
+            display: flex;
+            align-items: center;
+            gap: 32px;
+        }
+        
+        .step {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .step-number {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            background-color: #FF9900;
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        
+        .step-number.inactive {
+            background-color: #ddd;
+            color: #666;
+        }
+        
+        .main-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 24px 16px;
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 32px;
+        }
+        
+        .checkout-form {
+            background-color: white;
+            padding: 24px;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+        }
+        
+        .section-title {
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 16px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #ddd;
+        }
+        
+        .form-group {
+            margin-bottom: 16px;
+        }
+        
+        .form-label {
+            display: block;
+            font-weight: bold;
+            margin-bottom: 4px;
+        }
+        
+        .form-input {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+        }
+        
+        .order-summary {
+            background-color: white;
+            padding: 24px;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+            height: fit-content;
+        }
+        
+        .order-item {
+            display: flex;
+            align-items: center;
+            padding: 12px 0;
+            border-bottom: 1px solid #f0f0f0;
+        }
+        
+        .item-image {
+            font-size: 32px;
+            margin-right: 12px;
+        }
+        
+        .item-details {
+            flex: 1;
+        }
+        
+        .item-name {
+            font-weight: bold;
+            margin-bottom: 4px;
+        }
+        
+        .item-options {
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 4px;
+        }
+        
+        .item-price {
+            font-weight: bold;
+            color: #B12704;
+        }
+        
+        .item-quantity {
+            margin-left: 12px;
+            font-size: 14px;
+        }
+        
+        .order-totals {
+            padding: 16px 0;
+        }
+        
+        .total-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+        
+        .total-row.final {
+            font-size: 18px;
+            font-weight: bold;
+            padding-top: 8px;
+            border-top: 1px solid #ddd;
+        }
+        
+        .place-order-btn {
+            width: 100%;
+            background-color: #FF9900;
+            color: #0F1111;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            margin-top: 16px;
+        }
+        
+        .place-order-btn:hover {
+            background-color: #e88900;
+        }
+        
+        .success-page {
+            text-align: center;
+            padding: 48px 24px;
+            background-color: white;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+        }
+        
+        .success-icon {
+            font-size: 64px;
+            margin-bottom: 24px;
+        }
+        
+        .success-title {
+            font-size: 24px;
+            font-weight: bold;
+            margin-bottom: 16px;
+            color: #4CAF50;
+        }
+        
+        .order-number {
+            font-size: 18px;
+            margin-bottom: 24px;
+            color: #666;
+        }
+        
+        .continue-shopping-btn {
+            background-color: #FF9900;
+            color: #0F1111;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <div class="header">
+        <div class="header-content">
+            <div class="logo" onclick="goHome()">shopzone</div>
+        </div>
+    </div>
+
+    <!-- Checkout Steps -->
+    <div class="checkout-steps">
+        <div class="steps-content">
+            <div class="step">
+                <div class="step-number">1</div>
+                <span>Sign in</span>
+            </div>
+            <div class="step">
+                <div class="step-number">2</div>
+                <span>Shipping address</span>
+            </div>
+            <div class="step">
+                <div class="step-number">3</div>
+                <span>Payment method</span>
+            </div>
+            <div class="step">
+                <div class="step-number inactive">4</div>
+                <span>Review order</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main-content" id="checkoutContent">
+        <!-- Checkout Form -->
+        <div class="checkout-form">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                <h2 class="section-title" style="margin-bottom: 0;">Shipping Address</h2>
+                <button type="button" onclick="fillTestData()" style="background-color: #007185; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                    Use Test Data
+                </button>
+            </div>
+            <form id="checkoutForm">
+                <div class="form-group">
+                    <label class="form-label">Full Name</label>
+                    <input type="text" class="form-input" id="fullName" required>
+                </div>
+                
+                <div class="form-group">
+                    <label class="form-label">Address Line 1</label>
+                    <input type="text" class="form-input" id="address1" required>
+                </div>
+                
+                <div class="form-group">
+                    <label class="form-label">Address Line 2 (Optional)</label>
+                    <input type="text" class="form-input" id="address2">
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">City</label>
+                        <input type="text" class="form-input" id="city" required>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">State</label>
+                        <input type="text" class="form-input" id="state" required>
+                    </div>
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">ZIP Code</label>
+                        <input type="text" class="form-input" id="zipCode" required>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Phone Number</label>
+                        <input type="tel" class="form-input" id="phone" required>
+                    </div>
+                </div>
+            </form>
+
+            <h2 class="section-title" style="margin-top: 32px;">Payment Method</h2>
+            <div class="form-group">
+                <label class="form-label">Card Number</label>
+                <input type="text" class="form-input" id="cardNumber" placeholder="1234 5678 9012 3456" required>
+            </div>
+            
+            <div class="form-row">
+                <div class="form-group">
+                    <label class="form-label">Expiry Date</label>
+                    <input type="text" class="form-input" id="expiryDate" placeholder="MM/YY" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">CVV</label>
+                    <input type="text" class="form-input" id="cvv" placeholder="123" required>
+                </div>
+            </div>
+            
+            <div class="form-group">
+                <label class="form-label">Name on Card</label>
+                <input type="text" class="form-input" id="cardName" required>
+            </div>
+        </div>
+
+        <!-- Order Summary -->
+        <div class="order-summary">
+            <h2 class="section-title">Order Summary</h2>
+            <div id="orderItems">
+                <!-- Order items will be populated by JavaScript -->
+            </div>
+            
+            <div class="order-totals">
+                <div class="total-row">
+                    <span>Subtotal:</span>
+                    <span id="subtotal">$0</span>
+                </div>
+                <div class="total-row">
+                    <span>Shipping:</span>
+                    <span id="shipping">FREE</span>
+                </div>
+                <div class="total-row">
+                    <span>Tax:</span>
+                    <span id="tax">$0</span>
+                </div>
+                <div class="total-row final">
+                    <span>Total:</span>
+                    <span id="total">$0</span>
+                </div>
+            </div>
+            
+            <button class="place-order-btn" onclick="placeOrder()">
+                Place your order
+            </button>
+        </div>
+    </div>
+
+    <script>
+        let cart = JSON.parse(localStorage.getItem('cart') || '[]');
+
+        // Initialize page
+        document.addEventListener('DOMContentLoaded', function() {
+            if (cart.length === 0) {
+                // Redirect to home if cart is empty
+                window.location.href = 'index.html';
+                return;
+            }
+            
+            renderOrderSummary();
+            // Don't auto-fill data - let automation handle it
+        });
+
+        function fillTestData() {
+            // Fill only basic test data for automation testing
+            document.getElementById('fullName').value = 'Test User';
+            document.getElementById('address1').value = '123 Test Street';
+            document.getElementById('city').value = 'Test City';
+            document.getElementById('state').value = 'CA';
+            document.getElementById('zipCode').value = '12345';
+            document.getElementById('phone').value = '555-0123';
+            
+            // Fill basic payment information for testing
+            document.getElementById('cardNumber').value = '4111 1111 1111 1111';
+            document.getElementById('expiryDate').value = '12/25';
+            document.getElementById('cvv').value = '123';
+            document.getElementById('cardName').value = 'Test User';
+        }
+
+        function renderOrderSummary() {
+            const orderItems = document.getElementById('orderItems');
+            const subtotal = cart.reduce((total, item) => total + (item.price * item.quantity), 0);
+            const tax = subtotal * 0.08; // 8% tax
+            const totalAmount = subtotal + tax;
+
+            // Render order items
+            orderItems.innerHTML = cart.map(item => `
+                <div class="order-item">
+                    <div class="item-image">${item.image}</div>
+                    <div class="item-details">
+                        <div class="item-name">${item.name}</div>
+                        ${item.size ? `<div class="item-options">Size: ${item.size}</div>` : ''}
+                        ${item.color ? `<div class="item-options">Color: ${item.color}</div>` : ''}
+                        <div class="item-price">$${item.price.toLocaleString()}</div>
+                    </div>
+                    <div class="item-quantity">Qty: ${item.quantity}</div>
+                </div>
+            `).join('');
+
+            // Update totals
+            document.getElementById('subtotal').textContent = `$${subtotal.toLocaleString()}`;
+            document.getElementById('tax').textContent = `$${tax.toFixed(2)}`;
+            document.getElementById('total').textContent = `$${totalAmount.toFixed(2)}`;
+        }
+
+        function placeOrder() {
+            // Validate form
+            const form = document.getElementById('checkoutForm');
+            if (!form.checkValidity()) {
+                form.reportValidity();
+                return;
+            }
+
+            // Validate payment fields
+            const cardNumber = document.getElementById('cardNumber').value;
+            const expiryDate = document.getElementById('expiryDate').value;
+            const cvv = document.getElementById('cvv').value;
+            const cardName = document.getElementById('cardName').value;
+
+            if (!cardNumber || !expiryDate || !cvv || !cardName) {
+                alert('Please fill in all payment information');
+                return;
+            }
+
+            // Generate order number
+            const orderNumber = 'SZ' + Date.now().toString().slice(-8);
+            
+            // Clear cart
+            cart = [];
+            localStorage.setItem('cart', JSON.stringify(cart));
+            
+            // Show success page
+            showSuccessPage(orderNumber);
+        }
+
+        function showSuccessPage(orderNumber) {
+            const checkoutContent = document.getElementById('checkoutContent');
+            checkoutContent.innerHTML = `
+                <div class="success-page" style="grid-column: 1 / -1;">
+                    <div class="success-icon">✅</div>
+                    <h1 class="success-title">Order Placed Successfully!</h1>
+                    <div class="order-number">Order Number: ${orderNumber}</div>
+                    <p style="margin-bottom: 24px; color: #666;">
+                        Thank you for your order! You will receive a confirmation email shortly.
+                        Your items will be delivered within 1-2 business days.
+                    </p>
+                    <button class="continue-shopping-btn" onclick="goHome()">
+                        Continue Shopping
+                    </button>
+                </div>
+            `;
+        }
+
+        function goHome() {
+            window.location.href = 'index.html';
+        }
+
+        // Format card number input
+        document.getElementById('cardNumber').addEventListener('input', function(e) {
+            let value = e.target.value.replace(/\s/g, '').replace(/[^0-9]/gi, '');
+            let formattedValue = value.match(/.{1,4}/g)?.join(' ') || value;
+            e.target.value = formattedValue;
+        });
+
+        // Format expiry date input
+        document.getElementById('expiryDate').addEventListener('input', function(e) {
+            let value = e.target.value.replace(/\D/g, '');
+            if (value.length >= 2) {
+                value = value.substring(0, 2) + '/' + value.substring(2, 4);
+            }
+            e.target.value = value;
+        });
+
+        // Format CVV input
+        document.getElementById('cvv').addEventListener('input', function(e) {
+            e.target.value = e.target.value.replace(/\D/g, '').substring(0, 3);
+        });
+    </script>
+</body>
+</html>

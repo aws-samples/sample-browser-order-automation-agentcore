@@ -74,23 +74,25 @@ class SettingsService:
                 region = self.get_system_config().get("agentcore_region", "us-west-2")
 
             iam = boto3.client("iam", region_name=region)
-            
+
             # Get all roles using pagination
             all_roles = []
-            paginator = iam.get_paginator('list_roles')
-            
+            paginator = iam.get_paginator("list_roles")
+
             # Add pagination configuration to prevent infinite loops
             page_iterator = paginator.paginate(
                 PaginationConfig={
-                    'MaxItems': 5000,  # Maximum 5000 roles
-                    'PageSize': 100     # 100 roles per page (AWS default)
+                    "MaxItems": 5000,  # Maximum 5000 roles
+                    "PageSize": 100,  # 100 roles per page (AWS default)
                 }
             )
-            
+
             for page in page_iterator:
-                if 'Roles' in page:
-                    all_roles.extend(page['Roles'])
-                    logger.debug(f"Retrieved {len(page['Roles'])} roles from current page")
+                if "Roles" in page:
+                    all_roles.extend(page["Roles"])
+                    logger.debug(
+                        f"Retrieved {len(page['Roles'])} roles from current page"
+                    )
 
             logger.info(f"Retrieved total of {len(all_roles)} IAM roles from AWS")
 
@@ -100,10 +102,10 @@ class SettingsService:
                 for role in sorted(all_roles, key=lambda x: x["RoleName"])
                 if role.get("Arn") and role.get("RoleName")  # Ensure both fields exist
             ]
-            
+
             logger.info(f"Returning {len(role_options)} valid IAM role options")
             return role_options
-            
+
         except Exception as e:
             logger.error(f"Failed to get IAM roles: {e}")
             return []
@@ -220,34 +222,46 @@ class SettingsService:
         """Get automation configuration for a specific method"""
         try:
             system_config = self.get_system_config()
-            
+
             # Base configuration for all automation methods
             base_config = {
                 "agentcore_region": system_config.get("agentcore_region", "us-west-2"),
-                "session_replay_s3_bucket": system_config.get("session_replay_s3_bucket", ""),
-                "session_replay_s3_prefix": system_config.get("session_replay_s3_prefix", "session-replays/"),
-                "browser_session_timeout": system_config.get("browser_session_timeout", 3600),
+                "session_replay_s3_bucket": system_config.get(
+                    "session_replay_s3_bucket", ""
+                ),
+                "session_replay_s3_prefix": system_config.get(
+                    "session_replay_s3_prefix", "session-replays/"
+                ),
+                "browser_session_timeout": system_config.get(
+                    "browser_session_timeout", 3600
+                ),
                 "execution_role_arn": system_config.get("execution_role_arn", ""),
-                "default_model": system_config.get("default_model", "us.anthropic.claude-sonnet-4-20250514-v1:0"),
+                "default_model": system_config.get(
+                    "default_model", "us.anthropic.claude-sonnet-4-20250514-v1:0"
+                ),
                 "nova_act_api_key": system_config.get("nova_act_api_key", ""),
             }
-            
+
             # Method-specific configurations
             if automation_method == "strands":
-                base_config.update({
-                    "automation_method": "strands",
-                    "supports_live_view": True,
-                    "supports_manual_control": True,
-                    "supports_session_replay": True,
-                })
+                base_config.update(
+                    {
+                        "automation_method": "strands",
+                        "supports_live_view": True,
+                        "supports_manual_control": True,
+                        "supports_session_replay": True,
+                    }
+                )
             elif automation_method == "nova_act":
-                base_config.update({
-                    "automation_method": "nova_act",
-                    "supports_live_view": True,
-                    "supports_manual_control": False,
-                    "supports_session_replay": True,
-                })
-            
+                base_config.update(
+                    {
+                        "automation_method": "nova_act",
+                        "supports_live_view": True,
+                        "supports_manual_control": False,
+                        "supports_session_replay": True,
+                    }
+                )
+
             return base_config
         except Exception as e:
             logger.error(f"Failed to get automation config: {e}")
@@ -284,7 +298,9 @@ class SettingsService:
             logger.error(f"Failed to search S3 buckets: {e}")
             return []
 
-    def setup_complete_environment(self, role_name: str, bucket_name: str) -> Dict[str, Any]:
+    def setup_complete_environment(
+        self, role_name: str, bucket_name: str
+    ) -> Dict[str, Any]:
         """Setup complete AWS environment (simplified)"""
         return {
             "overall_status": "success",

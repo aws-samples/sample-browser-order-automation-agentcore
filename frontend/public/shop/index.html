@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ShopZone - Your Online Shopping Destination</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Amazon Ember', Arial, sans-serif;
+            background-color: #fff;
+        }
+        
+        .header {
+            background-color: #232F3E;
+            color: white;
+            padding: 8px 0;
+        }
+        
+        .header-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            align-items: center;
+            padding: 0 16px;
+        }
+        
+        .logo {
+            font-size: 24px;
+            font-weight: bold;
+            margin-right: 24px;
+        }
+        
+        .search-container {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            max-width: 600px;
+        }
+        
+        .search-input {
+            flex: 1;
+            padding: 8px 12px;
+            border: none;
+            border-radius: 4px 0 0 4px;
+            font-size: 14px;
+        }
+        
+        .search-button {
+            padding: 8px 16px;
+            background-color: #FF9900;
+            border: none;
+            border-radius: 0 4px 4px 0;
+            cursor: pointer;
+        }
+        
+        .nav-links {
+            margin-left: auto;
+            display: flex;
+            align-items: center;
+            gap: 24px;
+        }
+        
+        .nav-item {
+            font-size: 12px;
+            cursor: pointer;
+        }
+        
+        .nav-item div:first-child {
+            font-weight: normal;
+        }
+        
+        .nav-item div:last-child {
+            font-weight: bold;
+        }
+        
+        .cart-icon {
+            display: flex;
+            align-items: center;
+            cursor: pointer;
+            position: relative;
+        }
+        
+        .cart-count {
+            position: absolute;
+            top: -8px;
+            right: -8px;
+            background-color: #FF9900;
+            color: #232F3E;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        
+        .nav-bar {
+            background-color: #37475A;
+            color: white;
+            padding: 8px 0;
+        }
+        
+        .nav-bar-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 16px;
+            display: flex;
+            align-items: center;
+            gap: 24px;
+            font-size: 14px;
+        }
+        
+        .nav-bar-content span {
+            cursor: pointer;
+        }
+        
+        .main-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 16px;
+        }
+        
+        .prime-banner {
+            background-color: #146EB4;
+            color: white;
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin-bottom: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        
+        .prime-button {
+            background-color: white;
+            color: #146EB4;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        
+        .products-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 16px;
+        }
+        
+        .product-card {
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 16px;
+            background-color: white;
+            cursor: pointer;
+            transition: box-shadow 0.2s;
+        }
+        
+        .product-card:hover {
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+        
+        .product-image {
+            text-align: center;
+            font-size: 48px;
+            margin-bottom: 12px;
+        }
+        
+        .product-name {
+            font-size: 16px;
+            font-weight: 500;
+            margin-bottom: 8px;
+            line-height: 1.3;
+        }
+        
+        .product-rating {
+            display: flex;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        
+        .stars {
+            margin-right: 8px;
+        }
+        
+        .star {
+            color: #ddd;
+        }
+        
+        .star.filled {
+            color: #FF9900;
+        }
+        
+        .reviews {
+            font-size: 14px;
+            color: #007185;
+        }
+        
+        .price-container {
+            display: flex;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+        
+        .price {
+            font-size: 24px;
+            font-weight: bold;
+            color: #B12704;
+        }
+        
+        .prime-badge {
+            margin-left: 12px;
+            background-color: #146EB4;
+            color: white;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        
+        .delivery-info {
+            font-size: 12px;
+            color: #565959;
+            margin-bottom: 12px;
+        }
+        
+        .add-to-cart-btn {
+            width: 100%;
+            background-color: #FF9900;
+            color: #0F1111;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: bold;
+            cursor: pointer;
+            margin-bottom: 8px;
+        }
+        
+        .buy-now-btn {
+            width: 100%;
+            background-color: #FFA41C;
+            color: #0F1111;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        
+        .modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: rgba(0,0,0,0.5);
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .modal-content {
+            background-color: white;
+            border-radius: 8px;
+            padding: 24px;
+            max-width: 600px;
+            width: 90%;
+            max-height: 80vh;
+            overflow: auto;
+        }
+        
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+        }
+        
+        .close-btn {
+            background: none;
+            border: none;
+            font-size: 24px;
+            cursor: pointer;
+        }
+        
+        .cart-item {
+            display: flex;
+            align-items: center;
+            padding: 16px 0;
+            border-bottom: 1px solid #ddd;
+        }
+        
+        .cart-item-image {
+            font-size: 32px;
+            margin-right: 16px;
+        }
+        
+        .cart-item-details {
+            flex: 1;
+        }
+        
+        .cart-item-name {
+            font-weight: bold;
+            margin-bottom: 4px;
+        }
+        
+        .cart-item-price {
+            color: #B12704;
+            font-weight: bold;
+        }
+        
+        .cart-item-quantity {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .cart-total {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 24px 0;
+            font-size: 20px;
+            font-weight: bold;
+        }
+        
+        .checkout-btn {
+            width: 100%;
+            background-color: #FF9900;
+            color: #0F1111;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        
+        .empty-cart {
+            text-align: center;
+            padding: 48px 0;
+        }
+        
+        .empty-cart-icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+        }
+        
+        .empty-cart-text {
+            font-size: 18px;
+            color: #565959;
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <div class="header">
+        <div class="header-content">
+            <div class="logo">shopzone</div>
+            
+            <div class="search-container">
+                <input 
+                    type="text" 
+                    class="search-input" 
+                    placeholder="Search ShopZone"
+                    id="searchInput"
+                />
+                <button class="search-button" onclick="performSearch()">🔍</button>
+            </div>
+
+            <div class="nav-links">
+                <div class="nav-item">
+                    <div>Hello, sign in</div>
+                    <div>Account & Lists</div>
+                </div>
+                <div class="nav-item">
+                    <div>Returns</div>
+                    <div>& Orders</div>
+                </div>
+                <div class="cart-icon" onclick="showCart()">
+                    <span style="font-size: 24px; margin-right: 4px;">🛒</span>
+                    <span style="font-size: 12px; font-weight: bold;">Cart</span>
+                    <span class="cart-count" id="cartCount" style="display: none;">0</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Navigation -->
+    <div class="nav-bar">
+        <div class="nav-bar-content">
+            <span>All</span>
+            <span>Today's Deals</span>
+            <span>Customer Service</span>
+            <span>Registry</span>
+            <span>Gift Cards</span>
+            <span>Sell</span>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main-content">
+        <!-- Prime Banner -->
+        <div class="prime-banner">
+            <div>
+                <div style="font-weight: bold; font-size: 16px;">Prime</div>
+                <div style="font-size: 14px;">FREE One-Day Delivery</div>
+            </div>
+            <button class="prime-button">Try Prime</button>
+        </div>
+
+        <!-- Products Grid -->
+        <div class="products-grid" id="productsGrid">
+            <!-- Products will be populated by JavaScript -->
+        </div>
+    </div>
+
+    <!-- Cart Modal -->
+    <div class="modal" id="cartModal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Shopping Cart</h2>
+                <button class="close-btn" onclick="hideCart()">×</button>
+            </div>
+            <div id="cartContent">
+                <!-- Cart content will be populated by JavaScript -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Product data
+        const products = [
+            { id: 1, name: 'Apple iPhone 15 Pro Max', price: 1199, rating: 4.5, reviews: 2847, image: '📱', category: 'Electronics', prime: true },
+            { id: 2, name: 'Samsung 65" 4K Smart TV', price: 899, rating: 4.3, reviews: 1523, image: '📺', category: 'Electronics', prime: true },
+            { id: 3, name: 'Sony WH-1000XM5 Headphones', price: 399, rating: 4.7, reviews: 3241, image: '🎧', category: 'Electronics', prime: true },
+            { id: 4, name: 'MacBook Air M3 13-inch', price: 1299, rating: 4.6, reviews: 892, image: '💻', category: 'Computers', prime: true },
+            { id: 5, name: 'Nike Air Max 270', price: 150, rating: 4.4, reviews: 5672, image: '👟', category: 'Shoes', prime: false },
+            { id: 6, name: 'Instant Pot Duo 7-in-1', price: 89, rating: 4.6, reviews: 12847, image: '🍲', category: 'Kitchen', prime: true },
+            { id: 7, name: 'Kindle Paperwhite', price: 139, rating: 4.5, reviews: 8934, image: '📖', category: 'Electronics', prime: true },
+            { id: 8, name: 'Dyson V15 Detect Vacuum', price: 749, rating: 4.4, reviews: 2156, image: '🧹', category: 'Home', prime: true },
+            { id: 9, name: 'Levi\'s 501 Original Jeans', price: 59, rating: 4.2, reviews: 4523, image: '👖', category: 'Clothing', prime: false },
+            { id: 10, name: 'Echo Dot (5th Gen)', price: 49, rating: 4.3, reviews: 15672, image: '🔊', category: 'Electronics', prime: true },
+            { id: 11, name: 'Fitbit Charge 6', price: 199, rating: 4.1, reviews: 3456, image: '⌚', category: 'Electronics', prime: true },
+            { id: 12, name: 'Ninja Foodi Air Fryer', price: 129, rating: 4.5, reviews: 6789, image: '🍟', category: 'Kitchen', prime: true },
+            { id: 13, name: 'Adidas Ultraboost 22', price: 180, rating: 4.3, reviews: 2341, image: '👟', category: 'Shoes', prime: false },
+            { id: 14, name: 'Ring Video Doorbell', price: 99, rating: 4.2, reviews: 8765, image: '🚪', category: 'Home', prime: true },
+            { id: 15, name: 'Patagonia Down Jacket', price: 299, rating: 4.6, reviews: 1234, image: '🧥', category: 'Clothing', prime: false },
+            { id: 16, name: 'iPad Air 5th Generation', price: 599, rating: 4.5, reviews: 2987, image: '📱', category: 'Electronics', prime: true },
+            { id: 17, name: 'KitchenAid Stand Mixer', price: 379, rating: 4.7, reviews: 5432, image: '🥧', category: 'Kitchen', prime: true },
+            { id: 18, name: 'The North Face Backpack', price: 89, rating: 4.4, reviews: 3456, image: '🎒', category: 'Outdoor', prime: false },
+            { id: 19, name: 'Bose SoundLink Flex', price: 149, rating: 4.3, reviews: 2876, image: '🔊', category: 'Electronics', prime: true },
+            { id: 20, name: 'Allbirds Tree Runners', price: 98, rating: 4.1, reviews: 4567, image: '👟', category: 'Shoes', prime: false }
+        ];
+
+        let cart = JSON.parse(localStorage.getItem('cart') || '[]');
+        let currentSearchTerm = '';
+
+        // Initialize page
+        document.addEventListener('DOMContentLoaded', function() {
+            // Check for search parameter
+            const urlParams = new URLSearchParams(window.location.search);
+            const searchParam = urlParams.get('search');
+            if (searchParam) {
+                currentSearchTerm = searchParam;
+                document.getElementById('searchInput').value = searchParam;
+            }
+            
+            renderProducts();
+            updateCartCount();
+        });
+
+        function renderStars(rating) {
+            let stars = '';
+            for (let i = 1; i <= 5; i++) {
+                stars += `<span class="star ${i <= rating ? 'filled' : ''}">${i <= rating ? '★' : '☆'}</span>`;
+            }
+            return stars;
+        }
+
+        function renderProducts() {
+            const grid = document.getElementById('productsGrid');
+            const filteredProducts = products.filter(product =>
+                product.name.toLowerCase().includes(currentSearchTerm.toLowerCase())
+            );
+
+            grid.innerHTML = filteredProducts.map(product => `
+                <div class="product-card" onclick="openProductDetail(${product.id})">
+                    <div class="product-image">${product.image}</div>
+                    <div class="product-name">${product.name}</div>
+                    <div class="product-rating">
+                        <div class="stars">${renderStars(product.rating)}</div>
+                        <span class="reviews">(${product.reviews.toLocaleString()})</span>
+                    </div>
+                    <div class="price-container">
+                        <span class="price">$${product.price}</span>
+                        ${product.prime ? '<div class="prime-badge">Prime</div>' : ''}
+                    </div>
+                    <div class="delivery-info">FREE delivery tomorrow</div>
+                    <button class="add-to-cart-btn" onclick="event.stopPropagation(); addToCart(${product.id})">
+                        Add to Cart
+                    </button>
+                    <button class="buy-now-btn" onclick="event.stopPropagation(); buyNow(${product.id})">
+                        Buy Now
+                    </button>
+                </div>
+            `).join('');
+        }
+
+        function performSearch() {
+            currentSearchTerm = document.getElementById('searchInput').value;
+            renderProducts();
+        }
+
+        function addToCart(productId) {
+            const product = products.find(p => p.id === productId);
+            const existingItem = cart.find(item => item.id === productId);
+            
+            if (existingItem) {
+                existingItem.quantity += 1;
+            } else {
+                cart.push({ ...product, quantity: 1 });
+            }
+            
+            // Save to localStorage
+            localStorage.setItem('cart', JSON.stringify(cart));
+            updateCartCount();
+            
+            // Show success message
+            alert(`${product.name} added to cart!`);
+        }
+
+        function buyNow(productId) {
+            addToCart(productId);
+            showCart();
+        }
+
+        function openProductDetail(productId) {
+            // Navigate to product detail page
+            window.location.href = `product.html?id=${productId}`;
+        }
+
+        function updateCartCount() {
+            const count = cart.reduce((sum, item) => sum + item.quantity, 0);
+            const cartCountElement = document.getElementById('cartCount');
+            
+            if (count > 0) {
+                cartCountElement.textContent = count;
+                cartCountElement.style.display = 'flex';
+            } else {
+                cartCountElement.style.display = 'none';
+            }
+        }
+
+        function showCart() {
+            document.getElementById('cartModal').style.display = 'flex';
+            renderCartContent();
+        }
+
+        function hideCart() {
+            document.getElementById('cartModal').style.display = 'none';
+        }
+
+        function renderCartContent() {
+            const cartContent = document.getElementById('cartContent');
+            
+            if (cart.length === 0) {
+                cartContent.innerHTML = `
+                    <div class="empty-cart">
+                        <div class="empty-cart-icon">🛒</div>
+                        <div class="empty-cart-text">Your cart is empty</div>
+                    </div>
+                `;
+                return;
+            }
+
+            const totalPrice = cart.reduce((total, item) => total + (item.price * item.quantity), 0);
+            const totalItems = cart.reduce((sum, item) => sum + item.quantity, 0);
+
+            cartContent.innerHTML = `
+                ${cart.map(item => `
+                    <div class="cart-item">
+                        <div class="cart-item-image">${item.image}</div>
+                        <div class="cart-item-details">
+                            <div class="cart-item-name">${item.name}</div>
+                            <div class="cart-item-price">$${item.price}</div>
+                        </div>
+                        <div class="cart-item-quantity">
+                            <span>Qty: ${item.quantity}</span>
+                            <div style="font-weight: bold;">$${(item.price * item.quantity).toLocaleString()}</div>
+                        </div>
+                    </div>
+                `).join('')}
+                
+                <div class="cart-total">
+                    <span>Subtotal (${totalItems} items):</span>
+                    <span style="color: #B12704;">$${totalPrice.toLocaleString()}</span>
+                </div>
+
+                <button class="checkout-btn" onclick="proceedToCheckout()">
+                    Proceed to checkout
+                </button>
+            `;
+        }
+
+        function proceedToCheckout() {
+            window.location.href = 'checkout.html';
+        }
+
+        // Search functionality
+        document.getElementById('searchInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                performSearch();
+            }
+        });
+    </script>
+</body>
+</html>
