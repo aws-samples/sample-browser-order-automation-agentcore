@@ -19,6 +19,7 @@ anthropic>=0.7.0
 # Browser Automation
 playwright>=1.40.0
 nest-asyncio>=1.5.8
+nova-act>=0.1.0
 
 # MCP (Model Context Protocol)
 mcp>=1.11.0

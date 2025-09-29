@@ -25,6 +25,7 @@ import FailedOrders from './pages/FailedOrders';
 import OrderDetails from './pages/OrderDetails';
 import CreateOrder from './pages/CreateOrder';
 import SecretVault from './pages/SecretVault';
+import MockShop from './pages/MockShop';
 
 function AppContent() {
   const [navigationOpen, setNavigationOpen] = useState(true);
@@ -458,7 +459,10 @@ function AppContent() {
 function App() {
   return (
     <Router>
-      <AppContent />
+      <Routes>
+        <Route path="/shop" element={<MockShop />} />
+        <Route path="*" element={<AppContent />} />
+      </Routes>
     </Router>
   );
 }

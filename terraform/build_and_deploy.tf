@@ -26,7 +26,7 @@ resource "null_resource" "docker_build_push" {
   depends_on = [aws_ecr_repository.order_automation]
 }
 
-# Build React app locally and upload to S3
+# Build React app in isolated environment and upload to S3
 resource "null_resource" "build_frontend" {
   triggers = {
     frontend_hash = sha256(join("", [for f in fileset("../frontend/src", "**") : filesha256("../frontend/src/${f}")]))
@@ -35,9 +35,32 @@ resource "null_resource" "build_frontend" {
 
   provisioner "local-exec" {
     command = <<-EOT
-      cd ../frontend
-      npm ci
+      # Create temporary build directory to avoid affecting local development
+      BUILD_DIR=$(mktemp -d)
+      echo "Building frontend in temporary directory: $BUILD_DIR"
+      
+      # Copy frontend source to temp directory (excluding node_modules)
+      rsync -av --exclude='node_modules' --exclude='build' --exclude='.git' ../frontend/ $BUILD_DIR/
+      cd $BUILD_DIR
+      
+      # Install dependencies in clean environment
+      echo "Installing dependencies in isolated environment..."
+      npm ci --production=false
+      
+      # Build the project
+      echo "Building React app..."
       npm run build
+      
+      # Copy build output back to original location
+      echo "Copying build output..."
+      rm -rf ../frontend/build
+      cp -r build ../frontend/
+      
+      # Cleanup temp directory
+      echo "Cleaning up temporary directory..."
+      rm -rf $BUILD_DIR
+      
+      echo "Frontend build completed successfully"
     EOT
   }
 }

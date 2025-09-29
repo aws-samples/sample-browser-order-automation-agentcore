@@ -68,26 +68,42 @@ class SettingsService:
             ]
 
     def get_available_iam_roles(self, region: str = None) -> List[Dict[str, str]]:
-        """Get list of available IAM roles"""
+        """Get list of available IAM roles with pagination support"""
         try:
             if not region:
                 region = self.get_system_config().get("agentcore_region", "us-west-2")
 
             iam = boto3.client("iam", region_name=region)
-            roles = iam.list_roles()["Roles"]
+            
+            # Get all roles using pagination
+            all_roles = []
+            paginator = iam.get_paginator('list_roles')
+            
+            # Add pagination configuration to prevent infinite loops
+            page_iterator = paginator.paginate(
+                PaginationConfig={
+                    'MaxItems': 5000,  # Maximum 5000 roles
+                    'PageSize': 100     # 100 roles per page (AWS default)
+                }
+            )
+            
+            for page in page_iterator:
+                if 'Roles' in page:
+                    all_roles.extend(page['Roles'])
+                    logger.debug(f"Retrieved {len(page['Roles'])} roles from current page")
 
-            # Filter for AgentCore-related roles
-            agentcore_roles = [
-                role
-                for role in roles
-                if "agentcore" in role["RoleName"].lower()
-                or "agent" in role["RoleName"].lower()
-            ]
+            logger.info(f"Retrieved total of {len(all_roles)} IAM roles from AWS")
 
-            return [
+            # Return all IAM roles (no filtering)
+            role_options = [
                 {"value": role["Arn"], "label": role["RoleName"]}
-                for role in sorted(agentcore_roles, key=lambda x: x["RoleName"])
+                for role in sorted(all_roles, key=lambda x: x["RoleName"])
+                if role.get("Arn") and role.get("RoleName")  # Ensure both fields exist
             ]
+            
+            logger.info(f"Returning {len(role_options)} valid IAM role options")
+            return role_options
+            
         except Exception as e:
             logger.error(f"Failed to get IAM roles: {e}")
             return []

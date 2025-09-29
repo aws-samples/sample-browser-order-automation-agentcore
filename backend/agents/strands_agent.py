@@ -39,9 +39,34 @@ from config import get_config_manager
 try:
     from strands import Agent, tool
     from strands.models import BedrockModel
-    from strands_tools.browser import AgentCoreBrowser
     import nest_asyncio
     from playwright.async_api import async_playwright
+    
+    # Import our custom browser tools
+    from tools.browser import (
+        browser_install,
+        browser_navigate,
+        browser_click,
+        browser_type,
+        browser_fill_form,
+        browser_take_screenshot,
+        browser_evaluate,
+        browser_wait_for,
+        browser_press_key,
+        browser_hover,
+        browser_select_option,
+        browser_file_upload,
+        browser_handle_dialog,
+        browser_drag,
+        browser_resize,
+        browser_tabs,
+        browser_navigate_back,
+        browser_snapshot,
+        browser_network_requests,
+        browser_console_messages,
+        browser_close,
+    )
+    BROWSER_TOOLS_AVAILABLE = True
     
     # Apply nest_asyncio only if not using uvloop
     try:
@@ -68,9 +93,32 @@ except ImportError as e:
     Agent = None
     tool = None
     BedrockModel = None
-    AgentCoreBrowser = None
     nest_asyncio = None
     async_playwright = None
+    BROWSER_TOOLS_AVAILABLE = False
+    
+    # Set browser tools to None
+    browser_install = None
+    browser_navigate = None
+    browser_click = None
+    browser_type = None
+    browser_fill_form = None
+    browser_take_screenshot = None
+    browser_evaluate = None
+    browser_wait_for = None
+    browser_press_key = None
+    browser_hover = None
+    browser_select_option = None
+    browser_file_upload = None
+    browser_handle_dialog = None
+    browser_drag = None
+    browser_resize = None
+    browser_tabs = None
+    browser_navigate_back = None
+    browser_snapshot = None
+    browser_network_requests = None
+    browser_console_messages = None
+    browser_close = None
 
 
 class StrandsAgent:
@@ -105,8 +153,11 @@ class StrandsAgent:
         )
         os.makedirs(self.screenshots_dir, exist_ok=True)
 
-        if not Agent or not BedrockModel or not AgentCoreBrowser:
+        if not Agent or not BedrockModel:
             raise ImportError("Required Strands packages not available")
+        
+        if not BROWSER_TOOLS_AVAILABLE:
+            raise ImportError("Browser tools not available")
 
     def _add_log(self, level: str, message: str, step: str = None):
         """Add execution log entry with real-time broadcast"""
@@ -182,66 +233,42 @@ class StrandsAgent:
                 cache_tools="default",
             )
 
-            # Create browser tools in a separate thread to avoid asyncio conflicts
-            browser_tools = []
-            try:
-                # Create dedicated AgentCoreBrowser for this order in sync context
-                def create_browser_sync():
-                    try:
-                        # Set event loop policy to avoid uvloop issues
-                        import asyncio
-                        asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
+            # Set region for browser tools
+            os.environ['AWS_DEFAULT_REGION'] = self.region
+            
+            # Use our custom browser tools
+            browser_tools = [
+                browser_install,
+                browser_navigate,
+                browser_click,
+                browser_type,
+                browser_fill_form,
+                browser_take_screenshot,
+                browser_evaluate,
+                browser_wait_for,
+                browser_press_key,
+                browser_hover,
+                browser_select_option,
+                browser_file_upload,
+                browser_handle_dialog,
+                browser_drag,
+                browser_resize,
+                browser_tabs,
+                browser_navigate_back,
+                browser_snapshot,
+                browser_network_requests,
+                browser_console_messages,
+                browser_close,
+            ]
+            
+            self._add_log(
+                "INFO",
+                f"Using custom browser tools ({len(browser_tools)} tools available) in region {self.region}",
+                "browser_setup",
+            )
 
-                        try:
-                            loop = asyncio.new_event_loop()
-                            asyncio.set_event_loop(loop)
-                        except:
-                            pass
-
-                        agent_core_browser = AgentCoreBrowser(region=self.region)
-                        return agent_core_browser.browser
-                    except Exception as e:
-                        self._add_log(
-                            "WARNING",
-                            f"Failed to create AgentCoreBrowser: {e}",
-                            "browser_creation",
-                        )
-                        return None
-
-                # Run browser creation in thread pool
-                import concurrent.futures
-                import threading
-
-                # Use thread pool to avoid asyncio conflicts
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                    future = executor.submit(create_browser_sync)
-                    browser_tool = future.result(timeout=30)
-
-                if browser_tool:
-                    browser_tools.append(browser_tool)
-                    self._add_log(
-                        "INFO",
-                        "AgentCoreBrowser tool created successfully",
-                        "browser_creation",
-                    )
-                else:
-                    self._add_log(
-                        "WARNING",
-                        "AgentCoreBrowser tool creation failed",
-                        "browser_creation",
-                    )
-
-            except Exception as browser_error:
-                self._add_log(
-                    "WARNING",
-                    f"Browser tool creation failed: {browser_error}",
-                    "browser_creation",
-                )
-
-            # Create specialized order processing agent with only browser tools
-            all_tools = []
-            if browser_tools:
-                all_tools.extend(browser_tools)
+            # Create specialized order processing agent with browser tools
+            all_tools = browser_tools
 
             # Check if we have site credentials
             credentials_info = ""
@@ -260,7 +287,7 @@ If you encounter a login page, use these credentials to sign in before proceedin
             order_agent = Agent(
                 model=model,
                 tools=all_tools,
-                system_prompt=f"""You are a specialized e-commerce order processing agent.
+                system_prompt=f"""You are a specialized e-commerce order processing agent using AgentCore browser.
 Process this SINGLE order only:
 
 Product: {order.get('product_name', order.get('name', 'Unknown'))}
@@ -269,18 +296,26 @@ Size: {order.get('product_size', order.get('size', 'any available'))}
 Color: {order.get('product_color', order.get('color', 'any available'))}
 
 Steps to complete:
-1. Initialize a unique browser session with name "order-{int(datetime.now().timestamp())}"
-2. Navigate to the product URL
-3. If login is required, use the provided credentials to sign in
-4. Select the specified size and color if available
-5. Add to cart
-6. Verify cart contents
-7. Check checkout options (DO NOT complete payment)
-8. Close browser session when done
+1. Install AgentCore browser and get session ID: browser_install()
+2. Navigate to the product URL: browser_navigate(session_id, url)
+3. Take initial screenshot: browser_take_screenshot(session_id)
+4. If login is required, use the provided credentials to sign in
+5. Select the specified size and color if available
+6. Add to cart using browser_click() and browser_type()
+7. Verify cart contents using browser_snapshot()
+8. Take screenshots at each step: browser_take_screenshot(session_id)
+9. Check checkout options (DO NOT complete payment)
+10. Close browser session when done: browser_close(session_id)
 
 Report each step clearly and handle errors gracefully.
-Available tools: {len(all_tools)} browser automation tools.
+Available tools: {len(all_tools)} AgentCore browser automation tools running in AWS region {self.region}.
 {credentials_info}
+
+IMPORTANT: 
+- Always start with browser_install() to get a session_id
+- Use that session_id for all subsequent browser operations
+- The browser runs remotely in AWS and provides live view capabilities
+- Take screenshots frequently to document progress
 """,
             )
 
@@ -309,25 +344,66 @@ Available tools: {len(all_tools)} browser automation tools.
                 "initialization",
             )
 
-            # Initialize AgentCoreBrowser for session management
+            # Initialize our custom browser manager
             try:
-                # Set event loop policy to avoid uvloop issues
-                import asyncio
-                asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
+                # Set region environment variable for browser tools
+                os.environ['AWS_DEFAULT_REGION'] = self.region
                 
-                self.agent_core_browser = AgentCoreBrowser(region=self.region)
+                from tools.browser.browser_manager import BrowserManager
+                
+                # Create browser manager with region
+                browser_manager = BrowserManager(region=self.region)
+                
+                # Initialize browser manager asynchronously
+                async def init_browser_manager():
+                    await browser_manager._async_initialize()
+                    browser_session_id = await browser_manager._async_create_session(session_id)
+                    return browser_session_id
+                
+                # Run async initialization
+                import concurrent.futures
+                loop = asyncio.get_event_loop()
+                
+                try:
+                    # Try to run in current loop if possible
+                    browser_session_id = loop.run_until_complete(init_browser_manager())
+                except RuntimeError:
+                    # If we can't use current loop, use thread executor
+                    def run_async_init():
+                        new_loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(new_loop)
+                        try:
+                            return new_loop.run_until_complete(init_browser_manager())
+                        finally:
+                            new_loop.close()
+                    
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                        future = executor.submit(run_async_init)
+                        browser_session_id = future.result(timeout=30)
+                
+                self.browser_session_id = browser_session_id
+                self.browser_manager = browser_manager
+                
                 self._add_log(
                     "INFO",
-                    "AgentCoreBrowser initialized successfully",
+                    f"Custom browser manager initialized with session: {browser_session_id}",
                     "initialization",
                 )
+                
+                # Store browser session info for live view (optional)
+                self.agentcore_client = None  # Not using direct AgentCore client
+                self.ws_url = None
+                self.headers = None
+                    
             except Exception as e:
                 self._add_log(
                     "WARNING",
-                    f"AgentCoreBrowser initialization failed: {e}",
+                    f"Custom browser manager initialization failed: {e}",
                     "initialization",
                 )
-                self.agent_core_browser = None
+                self.browser_session_id = None
+                self.browser_manager = None
+                self.agentcore_client = None
 
             # Create main Strands agent for coordination
             bedrock_model = BedrockModel(
@@ -336,24 +412,63 @@ Available tools: {len(all_tools)} browser automation tools.
                 cache_tools="default",
             )
 
-            # Create coordination agent with only browser tools
-            tools = []
-            if self.agent_core_browser:
-                tools.append(self.agent_core_browser.browser)
+            # Create coordination agent with our custom browser tools
+            tools = [
+                browser_install,
+                browser_navigate,
+                browser_click,
+                browser_type,
+                browser_fill_form,
+                browser_take_screenshot,
+                browser_evaluate,
+                browser_wait_for,
+                browser_press_key,
+                browser_hover,
+                browser_select_option,
+                browser_file_upload,
+                browser_handle_dialog,
+                browser_drag,
+                browser_resize,
+                browser_tabs,
+                browser_navigate_back,
+                browser_snapshot,
+                browser_network_requests,
+                browser_console_messages,
+                browser_close,
+            ]
 
             self.strands_agent = Agent(
                 model=bedrock_model,
                 tools=tools,
-                system_prompt="""You are an e-commerce automation coordinator using independent order processing agents.
+                system_prompt=f"""You are an e-commerce automation agent that processes orders using AgentCore browser tools.
 
 Your role is to:
-1. Coordinate multiple order processing tasks
-2. Create independent agents for each order
-3. Monitor and report on order processing progress
-4. Handle errors and exceptions gracefully
+1. Use the browser tools to navigate e-commerce websites
+2. Search for and select products  
+3. Add items to cart and proceed through checkout
+4. Handle login, size/color selection, and shipping information
+5. Report progress and handle errors gracefully
 
-Each order will be processed by a specialized independent agent with its own browser session.
-You coordinate the overall process and provide status updates.
+You have access to {len(tools)} AgentCore browser automation tools running in AWS region {self.region}.
+
+IMPORTANT SESSION MANAGEMENT:
+- A browser session has already been created for you with session_id: {getattr(self, 'browser_session_id', 'unknown')}
+- Use this session_id for all browser operations
+- Do NOT call browser_install() again - the session is already active
+- Start directly with browser_navigate(session_id, url) to begin automation
+
+Available tools include:
+- browser_navigate: Navigate to URLs using AgentCore browser
+- browser_click: Click elements
+- browser_type: Type text into fields
+- browser_fill_form: Fill multiple form fields
+- browser_take_screenshot: Take screenshots for documentation
+- browser_wait_for: Wait for elements to appear
+- browser_snapshot: Get page HTML content
+- browser_close: Close the session when done
+
+The browser is running remotely in AWS and provides live view capabilities.
+Always use the provided session_id for all browser operations.
 """,
             )
 
@@ -366,7 +481,7 @@ You coordinate the overall process and provide status updates.
                 "status": "active",
                 "automation_method": "strands",
                 "created_at": datetime.now().isoformat(),
-                "agent_core_browser_available": bool(self.agent_core_browser),
+                "browser_session_id": getattr(self, 'browser_session_id', None),
             }
 
         except Exception as e:
@@ -427,8 +542,9 @@ You coordinate the overall process and provide status updates.
                 "shipping_address": order.shipping_address,
             }
 
-            # Create independent agent for this order
-            order_agent = self.create_independent_order_agent(order_dict)
+            # Use main Strands agent with existing browser session instead of creating independent agent
+            if not self.strands_agent:
+                raise Exception("Strands agent not initialized")
 
             if progress_callback:
                 await progress_callback(
@@ -436,7 +552,7 @@ You coordinate the overall process and provide status updates.
                         "order_id": order_id,
                         "status": "processing",
                         "progress": 30,
-                        "step": "Executing order automation",
+                        "step": "Executing order automation with existing browser session",
                         "automation_method": "strands",
                     }
                 )
@@ -456,7 +572,8 @@ If you encounter a login page, use these credentials to sign in before proceedin
 """
 
             # Process the order with dedicated agent
-            instruction = f"""Process this e-commerce order:
+            instruction = f"""Process this e-commerce order using session_id: {getattr(self, 'browser_session_id', 'unknown')}
+
 Product: {order.product_name}
 URL: {order.product_url}
 Size: {order.product_size or 'any available'}
@@ -466,23 +583,41 @@ Shipping Information:
 - Name: {order.shipping_address.get('first_name', '')} {order.shipping_address.get('last_name', '')}
 - Address: {order.shipping_address.get('address_line_1', '')}, {order.shipping_address.get('city', '')}, {order.shipping_address.get('state', '')} {order.shipping_address.get('postal_code', '')}
 
+Steps to follow:
+1. Navigate to the product URL: browser_navigate("{getattr(self, 'browser_session_id', 'unknown')}", "{order.product_url}")
+2. Take initial screenshot: browser_take_screenshot("{getattr(self, 'browser_session_id', 'unknown')}")
+3. Handle login if required using provided credentials
+4. Select size and color if available
+5. Add to cart
+6. Take screenshot of cart: browser_take_screenshot("{getattr(self, 'browser_session_id', 'unknown')}")
+7. Proceed to checkout (DO NOT complete payment)
+8. Take final screenshot: browser_take_screenshot("{getattr(self, 'browser_session_id', 'unknown')}")
+
 Follow all steps methodically and report your progress.
-Take screenshots at each major step for documentation.
 {credentials_info}
 """
 
-            # Execute in thread pool to avoid blocking
-            def execute_order_agent():
+            # Execute with Strands agent using browser tools
+            def execute_strands_agent():
                 try:
-                    response = order_agent(instruction)
+                    # Enhanced instruction with browser session ID
+                    enhanced_instruction = f"""
+{instruction}
+
+CRITICAL: Use session_id "{getattr(self, 'browser_session_id', 'unknown')}" for ALL browser operations.
+The browser session is already initialized and ready to use.
+Do NOT call browser_install() - start directly with browser_navigate().
+"""
+                    
+                    response = self.strands_agent(enhanced_instruction)
                     return str(response)
                 except Exception as e:
                     self._add_log(
                         "ERROR",
-                        f"Order agent execution error: {e}",
+                        f"Strands agent execution error: {e}",
                         "automation_execution",
                     )
-                    return f"FAILED: Order agent execution error: {e}"
+                    return f"FAILED: Strands agent execution error: {e}"
 
             # Run with timeout
             loop = asyncio.get_event_loop()
@@ -490,7 +625,7 @@ Take screenshots at each major step for documentation.
                 import concurrent.futures
 
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                    future = loop.run_in_executor(executor, execute_order_agent)
+                    future = loop.run_in_executor(executor, execute_strands_agent)
                     response_text = await asyncio.wait_for(
                         future, timeout=300.0
                     )  # 5 minute timeout
@@ -610,15 +745,37 @@ Take screenshots at each major step for documentation.
             }
 
     def get_live_view_url(self, expires: int = 300) -> Dict[str, Any]:
-        """Get live view URL for browser session via BrowserService"""
+        """Get live view URL for real-time browser session viewing"""
         try:
-            if not self.browser_service or not self.session_id:
-                return {"url": None, "error": "No active browser session"}
-
-            return self.browser_service.get_live_view_url(self.session_id, expires)
+            # Try to get live view URL from browser manager's AgentCore clients
+            if hasattr(self, 'browser_manager') and self.browser_manager and hasattr(self, 'browser_session_id'):
+                session = self.browser_manager.get_session(self.browser_session_id)
+                if session and session.agentcore_client:
+                    try:
+                        # Generate live view URL using AgentCore client
+                        live_view_url = session.agentcore_client.generate_live_view_url(expires=expires)
+                        
+                        if live_view_url:
+                            self._add_log("INFO", f"Generated live view URL from browser session: {live_view_url[:50]}...", "live_view")
+                            return {
+                                "url": live_view_url,
+                                "session_id": getattr(self, 'session_id', None),
+                                "browser_session_id": self.browser_session_id,
+                                "type": "dcv",
+                                "expires": expires
+                            }
+                    except Exception as e:
+                        self._add_log("WARNING", f"Failed to get live view from browser session: {e}", "live_view")
+            
+            # Fallback to BrowserService if available
+            if self.browser_service and self.session_id:
+                return self.browser_service.get_live_view_url(self.session_id, expires)
+            
+            return {"url": None, "error": "No active browser session with live view support"}
 
         except Exception as e:
             logger.error(f"Failed to get live view URL: {e}")
+            self._add_log("ERROR", f"Live view URL generation failed: {e}", "live_view")
             return {"url": None, "error": str(e)}
 
     async def process_orders_batch(
@@ -976,6 +1133,39 @@ Follow all steps methodically and report your progress."""
             self.strands_agent = None
             if force or not should_preserve:
                 self.browser_service = None
+                # Clean up browser session if needed
+                if hasattr(self, 'browser_session_id') and self.browser_session_id and hasattr(self, 'browser_manager'):
+                    try:
+                        # Run async cleanup
+                        async def cleanup_session():
+                            await self.browser_manager._async_close_session(self.browser_session_id)
+                        
+                        # Execute cleanup
+                        try:
+                            loop = asyncio.get_event_loop()
+                            if loop.is_running():
+                                import concurrent.futures
+                                def run_cleanup():
+                                    new_loop = asyncio.new_event_loop()
+                                    asyncio.set_event_loop(new_loop)
+                                    try:
+                                        return new_loop.run_until_complete(cleanup_session())
+                                    finally:
+                                        new_loop.close()
+                                
+                                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                                    executor.submit(run_cleanup).result(timeout=10)
+                            else:
+                                loop.run_until_complete(cleanup_session())
+                        except RuntimeError:
+                            asyncio.run(cleanup_session())
+                            
+                        self._add_log("INFO", f"Closed browser session: {self.browser_session_id}", "cleanup")
+                    except Exception as e:
+                        self._add_log("WARNING", f"Failed to close browser session: {e}", "cleanup")
+                # Clean up AgentCore client
+                if hasattr(self, 'agentcore_client'):
+                    self.agentcore_client = None
 
             logger.info("StrandsAgent cleanup complete")
 

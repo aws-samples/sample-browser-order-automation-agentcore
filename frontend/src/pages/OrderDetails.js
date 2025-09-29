@@ -624,6 +624,8 @@ const OrderDetails = ({ addNotification }) => {
             description="Detailed execution logs from the automation agent"
             actions={
               <SpaceBetween direction="horizontal" size="xs">
+                {/* TEMPORARILY DISABLED - Screenshots Button - Will be re-enabled later */}
+                {/* 
                 {(order?.screenshots?.length > 0) && (
                   <Button
                     iconName="camera"
@@ -632,6 +634,8 @@ const OrderDetails = ({ addNotification }) => {
                     Screenshots
                   </Button>
                 )}
+                */}
+                {/* END TEMPORARILY DISABLED - Screenshots Button */}
 
                 <Button
                   iconName="play"
@@ -912,26 +916,38 @@ const OrderDetails = ({ addNotification }) => {
               id: 'execution-logs',
               label: `Execution Logs (${(order?.execution_logs || []).length})`
             },
+            /* TEMPORARILY DISABLED - Screenshots Tab - Will be re-enabled later */
+            /*
             {
               id: 'screenshots',
               label: `Screenshots (${(order?.screenshots || []).length})`
             },
+            */
+            /* END TEMPORARILY DISABLED - Screenshots Tab */
             ...(['processing', 'requires_human'].includes(order?.status) ? [{
               id: 'live-view',
               label: 'Live Browser View'
             }] : []),
 
+            /* TEMPORARILY DISABLED - Raw Data Tab - Will be re-enabled later */
+            /*
             {
               id: 'raw-data',
               label: 'Raw Data'
             }
+            */
+            /* END TEMPORARILY DISABLED - Raw Data Tab */
           ]}
         />
 
         {/* Tab Content */}
         {activeTab === 'overview' && renderOverviewTab()}
         {activeTab === 'execution-logs' && renderExecutionLogsTab()}
-        {activeTab === 'screenshots' && renderScreenshotsTab()}
+        
+        {/* TEMPORARILY DISABLED - Screenshots Tab Content - Will be re-enabled later */}
+        {/* {activeTab === 'screenshots' && renderScreenshotsTab()} */}
+        {/* END TEMPORARILY DISABLED - Screenshots Tab Content */}
+        
         {activeTab === 'live-view' && (
           <LiveBrowserViewer
             orderId={order?.id}
@@ -939,6 +955,8 @@ const OrderDetails = ({ addNotification }) => {
           />
         )}
 
+        {/* TEMPORARILY DISABLED - Raw Data Tab Content - Will be re-enabled later */}
+        {/* 
         {activeTab === 'raw-data' && (
           <Container
             header={
@@ -971,6 +989,8 @@ const OrderDetails = ({ addNotification }) => {
             </Box>
           </Container>
         )}
+        */}
+        {/* END TEMPORARILY DISABLED - Raw Data Tab Content */}
       </Container>
 
       {/* Cancel Order Modal */}

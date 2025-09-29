@@ -36,6 +36,7 @@ nova_act_cache/
 
 # MCP
 mcp_cache/
+playwright-mcp/
 
 # Logs
 npm-debug.log*

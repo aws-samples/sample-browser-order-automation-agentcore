@@ -75,11 +75,14 @@ const Settings = ({ addNotification }) => {
 
       if (response.ok) {
         const data = await response.json();
+
         setAwsStatus(prev => ({
           ...prev,
           execution_roles: data.execution_roles || []
         }));
       } else {
+        const errorText = await response.text();
+
         throw new Error('Failed to load IAM roles');
       }
 
@@ -105,11 +108,14 @@ const Settings = ({ addNotification }) => {
 
       if (response.ok) {
         const data = await response.json();
+
         setAwsStatus(prev => ({
           ...prev,
           s3_buckets: data.s3_buckets || []
         }));
       } else {
+        const errorText = await response.text();
+
         throw new Error('Failed to load S3 buckets');
       }
 
@@ -385,7 +391,7 @@ const Settings = ({ addNotification }) => {
             <Select
               selectedOption={
                 systemConfig.execution_role_arn ? {
-                  label: awsStatus?.execution_roles?.find(role => role.arn === systemConfig.execution_role_arn)?.name ||
+                  label: awsStatus?.execution_roles?.find(role => role.value === systemConfig.execution_role_arn)?.label ||
                     systemConfig.execution_role_arn.split('/').pop() ||
                     systemConfig.execution_role_arn,
                   value: systemConfig.execution_role_arn
@@ -397,10 +403,12 @@ const Settings = ({ addNotification }) => {
               onFocus={loadIamRoles}
               options={
                 (() => {
-                  const roleOptions = awsStatus?.execution_roles?.map(role => ({
-                    label: role.name,
-                    value: role.arn
-                  })) || [];
+
+                  
+                  // 백엔드에서 {value: arn, label: name} 구조로 반환됨
+                  const roleOptions = awsStatus?.execution_roles || [];
+
+
 
                   // Add current value if it's not in the AWS list (for saved values)
                   if (systemConfig.execution_role_arn &&
@@ -415,8 +423,8 @@ const Settings = ({ addNotification }) => {
                   return roleOptions;
                 })()
               }
-              placeholder={iamLoaded ? "Select execution role" : "Click to load roles"}
-              empty={iamLoading ? "Loading execution roles..." : iamLoaded ? "No execution roles available" : "Click dropdown to load roles"}
+              placeholder={iamLoaded ? (awsStatus?.execution_roles?.length > 0 ? "Select execution role" : "No roles available") : "Click to load roles"}
+              empty={iamLoading ? "Loading execution roles..." : iamLoaded ? "No execution roles found. Check AWS credentials and permissions." : "Click dropdown to load roles"}
               filteringType="auto"
             />
           </FormField>
@@ -579,10 +587,12 @@ const Settings = ({ addNotification }) => {
               onFocus={loadS3Buckets}
               options={
                 (() => {
-                  const bucketOptions = awsStatus?.s3_buckets?.map(bucket => ({
-                    label: bucket.name,
-                    value: bucket.name
-                  })) || [];
+
+                  
+                  // 백엔드에서 {value: name, label: name} 구조로 반환됨
+                  const bucketOptions = awsStatus?.s3_buckets || [];
+
+
 
                   // Add current value if it's not in the AWS list (for saved values)
                   if (systemConfig.session_replay_s3_bucket &&

@@ -2116,7 +2116,7 @@ async def update_settings_config(request: dict):
             config_updates = request.get("config", {})
 
         if not config_updates:
-            return {"status": "warning", "message": "No configuration updates provided"}
+            return {"status": "success", "message": "No configuration updates provided"}
 
         result = settings_service.update_system_config(config_updates)
         return result
@@ -2134,7 +2134,7 @@ async def save_settings_config(request: dict):
         config_updates = request.get("config", {})
 
         if not config_updates:
-            return {"status": "warning", "message": "No configuration provided"}
+            return {"status": "success", "message": "No configuration provided"}
 
         result = settings_service.update_system_config(config_updates)
         return result
