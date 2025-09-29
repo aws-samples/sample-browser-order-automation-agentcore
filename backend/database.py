@@ -1169,6 +1169,7 @@ class DatabaseManager:
             status=OrderStatus(order_model.status),
             priority=OrderPriority(order_model.priority),
             automation_method=AutomationMethod(order_model.automation_method),
+            ai_model=order_model.ai_model,
             product_name=order_model.product_name,
             product_url=order_model.product_url,
             product_size=order_model.product_size,
@@ -1247,6 +1248,15 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"DatabaseManager.set_setting({key}) failed: {e}")
             raise
+
+    def close(self):
+        """Close database connections"""
+        try:
+            if hasattr(self, 'engine') and self.engine:
+                self.engine.dispose()
+                logger.info("Database engine disposed")
+        except Exception as e:
+            logger.error(f"Error closing database: {e}")
 
     def get_all_settings(self) -> Dict[str, Any]:
         """Get all settings"""

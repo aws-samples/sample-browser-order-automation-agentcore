@@ -124,22 +124,9 @@ resource "aws_iam_role_policy" "ecs_task" {
       {
         Effect = "Allow"
         Action = [
-          "bedrock-agentcore:CreateBrowser",
-          "bedrock-agentcore:ListBrowsers",
-          "bedrock-agentcore:GetBrowser",
-          "bedrock-agentcore:DeleteBrowser",
-          "bedrock-agentcore:StartBrowserSession",
-          "bedrock-agentcore:ListBrowserSessions",
-          "bedrock-agentcore:GetBrowserSession",
-          "bedrock-agentcore:StopBrowserSession",
-          "bedrock-agentcore:UpdateBrowserStream",
-          "bedrock-agentcore:ConnectBrowserAutomationStream",
-          "bedrock-agentcore:ConnectBrowserLiveViewStream"
+          "bedrock-agentcore:*"
         ]
-        Resource = [
-          "arn:aws:bedrock-agentcore:us-west-2:${data.aws_caller_identity.current.account_id}:browser/*",
-          "arn:aws:bedrock-agentcore:us-west-2:${data.aws_caller_identity.current.account_id}:browser-custom/*"
-        ]
+        Resource = "*"
       }
     ]
   })

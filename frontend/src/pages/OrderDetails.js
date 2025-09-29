@@ -14,7 +14,8 @@ import {
   Alert,
   Modal,
   KeyValuePairs,
-  Popover
+  Popover,
+  Link
 } from '@cloudscape-design/components';
 import LiveScreenshotViewer from '../components/LiveScreenshotViewer';
 import LiveBrowserViewer from '../components/LiveBrowserViewer';
@@ -370,7 +371,22 @@ const OrderDetails = ({ addNotification }) => {
                 { label: 'Order ID', value: order?.id || 'N/A' },
                 { label: 'Status', value: getStatusIndicator(order.status, order.status_tooltip) },
                 { label: 'Retailer', value: order.retailer || 'N/A' },
-                { label: 'Automation Method', value: order.automation_method_display || order.automation_method || 'N/A' }
+                { label: 'Automation Method', value: order.automation_method_display || order.automation_method || 'N/A' },
+                { 
+                  label: 'AI Model', 
+                  value: order?.ai_model ? (
+                    <span title={order.ai_model}>
+                      {order.ai_model.includes('claude-sonnet-4') ? 'Claude 3.5 Sonnet (New)' :
+                       order.ai_model.includes('claude-sonnet') ? 'Claude 3.5 Sonnet' :
+                       order.ai_model.includes('claude-haiku') ? 'Claude 3.5 Haiku' :
+                       order.ai_model.includes('claude-opus') ? 'Claude 3 Opus' :
+                       order.ai_model.includes('gpt-4') ? 'GPT-4' :
+                       order.ai_model.includes('gpt-3.5') ? 'GPT-3.5' :
+                       order.ai_model.length > 50 ? `${order.ai_model.substring(0, 30)}...` :
+                       order.ai_model}
+                    </span>
+                  ) : 'System Default'
+                }
               ]}
             />
             <KeyValuePairs
@@ -653,66 +669,7 @@ const OrderDetails = ({ addNotification }) => {
     );
   };
 
-  const renderScreenshotsTab = () => {
-    const screenshots = order?.screenshots || [];
-    
-    return (
-      <Container
-        header={
-          <Header
-            variant="h3"
-            actions={
-              screenshots.length > 0 && (
-                <Button
-                  variant="primary"
-                  iconName="view-full"
-                  onClick={() => setShowLiveViewer(true)}
-                >
-                  View Screenshots
-                </Button>
-              )
-            }
-          >
-            Screenshots ({screenshots.length})
-          </Header>
-        }
-      >
-        <SpaceBetween size="m">
-          {screenshots.length === 0 ? (
-            <Box textAlign="center" color="inherit">
-              <b>No screenshots available</b>
-            </Box>
-          ) : (
-            screenshots.map((screenshot, index) => (
-              <Box key={index} padding="m">
-                <SpaceBetween size="s">
-                  <Header variant="h4">{screenshot.step || `Screenshot ${index + 1}`}</Header>
-                  <Box>
-                    <img 
-                      src={screenshot.url} 
-                      alt={screenshot.description || `Screenshot ${index + 1}`}
-                      style={{ 
-                        maxWidth: '100%', 
-                        height: 'auto',
-                        border: '1px solid #e9ecef',
-                        borderRadius: '8px',
-                        boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
-                      }}
-                    />
-                    {screenshot.description && (
-                      <Box variant="small" color="text-body-secondary" margin={{ top: 'xs' }}>
-                        {screenshot.description}
-                      </Box>
-                    )}
-                  </Box>
-                </SpaceBetween>
-              </Box>
-            ))
-          )}
-        </SpaceBetween>
-      </Container>
-    );
-  };
+
 
   if (loading) {
     return (

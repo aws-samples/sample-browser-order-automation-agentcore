@@ -35,32 +35,29 @@ resource "null_resource" "build_frontend" {
 
   provisioner "local-exec" {
     command = <<-EOT
-      # Create temporary build directory to avoid affecting local development
-      BUILD_DIR=$(mktemp -d)
-      echo "Building frontend in temporary directory: $BUILD_DIR"
+      echo "Building frontend directly in source directory..."
+      cd ../frontend
       
-      # Copy frontend source to temp directory (excluding node_modules)
-      rsync -av --exclude='node_modules' --exclude='build' --exclude='.git' ../frontend/ $BUILD_DIR/
-      cd $BUILD_DIR
+      # Clean previous build
+      rm -rf build
+      rm -rf node_modules/.cache
       
-      # Install dependencies in clean environment
-      echo "Installing dependencies in isolated environment..."
+      # Install dependencies
+      echo "Installing dependencies..."
       npm ci --production=false
       
-      # Build the project
-      echo "Building React app..."
-      npm run build
+      # Build the project with production settings
+      echo "Building React app for production..."
+      GENERATE_SOURCEMAP=false npm run build
       
-      # Copy build output back to original location
-      echo "Copying build output..."
-      rm -rf ../frontend/build
-      cp -r build ../frontend/
-      
-      # Cleanup temp directory
-      echo "Cleaning up temporary directory..."
-      rm -rf $BUILD_DIR
+      # Verify build output
+      if [ ! -d "build" ]; then
+        echo "ERROR: Build directory not created"
+        exit 1
+      fi
       
       echo "Frontend build completed successfully"
+      ls -la build/
     EOT
   }
 }
@@ -76,6 +73,15 @@ resource "null_resource" "upload_frontend" {
 
   provisioner "local-exec" {
     command = <<-EOT
+      echo "Uploading frontend to S3..."
+      
+      # Verify build directory exists
+      if [ ! -d "../frontend/build" ]; then
+        echo "ERROR: Build directory not found"
+        exit 1
+      fi
+      
+      # Upload static assets with long cache
       aws s3 sync ../frontend/build/ s3://${aws_s3_bucket.static_assets.bucket}/ \
         --delete \
         --cache-control "public, max-age=31536000" \
@@ -83,11 +89,14 @@ resource "null_resource" "upload_frontend" {
         --exclude "service-worker.js" \
         --exclude "manifest.json"
       
+      # Upload HTML and service worker with no cache
       aws s3 sync ../frontend/build/ s3://${aws_s3_bucket.static_assets.bucket}/ \
         --cache-control "public, max-age=0, must-revalidate" \
         --include "*.html" \
         --include "service-worker.js" \
         --include "manifest.json"
+      
+      echo "Frontend upload completed"
     EOT
   }
 }
@@ -103,9 +112,22 @@ resource "null_resource" "cloudfront_invalidation" {
 
   provisioner "local-exec" {
     command = <<-EOT
-      aws cloudfront create-invalidation \
+      echo "Creating CloudFront invalidation..."
+      INVALIDATION_ID=$(aws cloudfront create-invalidation \
         --distribution-id ${aws_cloudfront_distribution.main.id} \
-        --paths "/*"
+        --paths "/*" \
+        --query 'Invalidation.Id' \
+        --output text)
+      
+      echo "CloudFront invalidation created: $INVALIDATION_ID"
+      
+      # Wait for invalidation to complete (optional, but ensures cache is cleared)
+      echo "Waiting for invalidation to complete..."
+      aws cloudfront wait invalidation-completed \
+        --distribution-id ${aws_cloudfront_distribution.main.id} \
+        --id $INVALIDATION_ID
+      
+      echo "CloudFront invalidation completed"
     EOT
   }
 }

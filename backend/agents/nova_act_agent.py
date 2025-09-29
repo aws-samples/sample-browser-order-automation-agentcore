@@ -456,16 +456,24 @@ class NovaActAgent:
                         endpoint_url=control_plane_url
                     )
 
-                    # Create browser with recording
+                    # Create browser with recording configuration
                     browser_name = f"nova_act_browser_{session_id[:8]}"
+                    execution_role_arn = self.agent_config.execution_role_arn
                     s3_bucket = self.agent_config.session_replay_s3_bucket
                     s3_prefix = f"{self.agent_config.session_replay_s3_prefix}{session_id}/"
-                    recording_role_arn = self.agent_config.execution_role_arn
 
-                    if recording_role_arn:
+                    # Execution role is required
+                    if not execution_role_arn:
+                        error_msg = "Execution role ARN is required for AgentCore browser creation"
+                        self._add_log("ERROR", error_msg, "browser_setup")
+                        raise RuntimeError(error_msg)
+
+                    # Create browser with recording if S3 bucket is configured
+                    if s3_bucket:
+                        self._add_log("INFO", f"Creating browser with recording: bucket={s3_bucket}, prefix={s3_prefix}", "browser_setup")
                         response = control_client.create_browser(
                             name=browser_name,
-                            executionRoleArn=recording_role_arn,
+                            executionRoleArn=execution_role_arn,
                             networkConfiguration={"networkMode": "PUBLIC"},
                             recording={
                                 "enabled": True,
@@ -473,8 +481,10 @@ class NovaActAgent:
                             }
                         )
                     else:
+                        self._add_log("INFO", f"Creating browser without recording (no S3 bucket configured)", "browser_setup")
                         response = control_client.create_browser(
                             name=browser_name,
+                            executionRoleArn=execution_role_arn,
                             networkConfiguration={"networkMode": "PUBLIC"}
                         )
 

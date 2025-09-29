@@ -71,14 +71,12 @@ class BrowserSession:
                     
                     # Delete the browser instance
                     try:
-                        from bedrock_agentcore._utils.endpoints import get_control_plane_endpoint
                         import boto3
                         
                         control_plane_url = get_control_plane_endpoint(self.agentcore_client.region)
                         control_client = boto3.client(
-                            "bedrock-agentcore-control",
-                            region_name=self.agentcore_client.region,
-                            endpoint_url=control_plane_url
+                            "bedrock-agentcore",
+                            region_name=self.agentcore_client.region
                         )
                         
                         if hasattr(self.agentcore_client, 'identifier'):
@@ -97,12 +95,27 @@ class BrowserSession:
 class BrowserManager:
     """Manages browser sessions using AgentCore remote browser."""
     
+    _instance = None
+    _initialized = False
+    
+    def __new__(cls, region: str = "us-east-1"):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+    
     def __init__(self, region: str = "us-east-1"):
-        self.sessions: Dict[str, BrowserSession] = {}
-        self.playwright = None
-        self._loop = None
-        self._nest_asyncio_applied = False
-        self.region = region
+        if not self._initialized:
+            self.sessions: Dict[str, BrowserSession] = {}
+            self.playwright = None
+            self._loop = None
+            self._nest_asyncio_applied = False
+            self.region = region
+            BrowserManager._initialized = True
+        else:
+            # Update region if different
+            if self.region != region:
+                self.region = region
+                logger.info(f"Updated BrowserManager region to: {region}")
     
     def _ensure_event_loop(self):
         """Ensure we have an event loop and nest_asyncio is applied."""
@@ -154,25 +167,24 @@ class BrowserManager:
             session_id = f"session_{int(time.time())}"
         
         if session_id in self.sessions:
-            raise ValueError(f"Session {session_id} already exists")
+            logger.info(f"Session {session_id} already exists, returning existing session")
+            return session_id
         
         # First create the browser instance (like Nova Act does)
         try:
-            from bedrock_agentcore._utils.endpoints import get_control_plane_endpoint
             import boto3
             
             # Create control plane client
-            control_plane_url = get_control_plane_endpoint(self.region)
             control_client = boto3.client(
-                "bedrock-agentcore-control",
-                region_name=self.region,
-                endpoint_url=control_plane_url
+                "bedrock-agentcore",
+                region_name=self.region
             )
 
             # Create browser instance first
             # Clean session_id to match pattern [a-zA-Z][a-zA-Z0-9_]{0,47}
-            clean_session_id = session_id.replace('-', '_')[:40]  # Limit length and replace hyphens
-            browser_name = f"browser_tools_{clean_session_id}"
+            # Take first 8 chars of session_id and replace hyphens
+            short_session_id = session_id.replace('-', '')[:8]  # Remove hyphens and limit to 8 chars
+            browser_name = f"browser_{short_session_id}"  # Total: browser_ (8) + 8 chars = 16 chars
             response = control_client.create_browser(
                 name=browser_name,
                 networkConfiguration={"networkMode": "PUBLIC"}
@@ -256,6 +268,74 @@ class BrowserManager:
             self.playwright = None
         
         logger.info("Browser manager cleaned up")
+    
+    def cleanup_sync(self):
+        """Synchronous cleanup for shutdown handlers."""
+        try:
+            # Force close all sessions first
+            for session_id, session in list(self.sessions.items()):
+                try:
+                    # Force stop AgentCore client immediately
+                    if session.agentcore_client:
+                        session.agentcore_client.stop()
+                        logger.info(f"Force stopped AgentCore client for session {session_id}")
+                except Exception as e:
+                    logger.warning(f"Error force stopping AgentCore client: {e}")
+            
+            # Clear sessions dict
+            self.sessions.clear()
+            
+            # Handle async cleanup in sync context with timeout
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # If loop is running, schedule cleanup with timeout
+                    import concurrent.futures
+                    def run_cleanup():
+                        new_loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(new_loop)
+                        try:
+                            # Use asyncio.wait_for for timeout
+                            return new_loop.run_until_complete(
+                                asyncio.wait_for(self._async_cleanup(), timeout=5.0)
+                            )
+                        except asyncio.TimeoutError:
+                            logger.warning("Async cleanup timed out")
+                        finally:
+                            new_loop.close()
+                    
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                        future = executor.submit(run_cleanup)
+                        future.result(timeout=8)  # Overall timeout
+                else:
+                    # Use asyncio.wait_for for timeout
+                    asyncio.run(asyncio.wait_for(self._async_cleanup(), timeout=5.0))
+            except (RuntimeError, asyncio.TimeoutError, concurrent.futures.TimeoutError):
+                logger.warning("Cleanup timed out, forcing shutdown")
+                # Force cleanup playwright
+                if self.playwright:
+                    try:
+                        # Don't wait for playwright cleanup
+                        self.playwright = None
+                    except Exception:
+                        pass
+        except Exception as e:
+            logger.error(f"Error during sync cleanup: {e}")
+        finally:
+            # Always reset state
+            self.sessions.clear()
+            self.playwright = None
+    
+    @classmethod
+    def reset_instance(cls):
+        """Reset the singleton instance (for testing/reloading)."""
+        if cls._instance:
+            try:
+                cls._instance.cleanup_sync()
+            except Exception as e:
+                logger.error(f"Error during instance reset: {e}")
+        cls._instance = None
+        cls._initialized = False
     
 
 

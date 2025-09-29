@@ -8,6 +8,8 @@ import os
 import json
 import asyncio
 import logging
+import signal
+import sys
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 from contextlib import asynccontextmanager
@@ -51,6 +53,20 @@ logger = logging.getLogger(__name__)
 db_manager = None
 order_queue = None
 # config_manager = None  # Replaced by SettingsService
+
+# Shutdown flag
+shutdown_event = asyncio.Event()
+
+
+def signal_handler(signum, frame):
+    """Handle shutdown signals"""
+    logger.info(f"Received signal {signum}, initiating graceful shutdown...")
+    shutdown_event.set()
+
+
+# Register signal handlers
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
 
 
 def get_settings_service():
@@ -172,22 +188,36 @@ async def lifespan(app: FastAPI):
         raise
     finally:
         # Shutdown
-        if order_queue:
-            await order_queue.stop()
-            logger.info("Order queue stopped")
+        logger.info("Starting graceful shutdown...")
 
-        # Only cleanup truly expired sessions, preserve active ones for stateless operation
+        # Stop order queue first
+        if order_queue:
+            try:
+                await order_queue.stop()
+                logger.info("Order queue stopped")
+            except Exception as e:
+                logger.error(f"Error stopping order queue: {e}")
+
+        # Cleanup browser sessions
         from services.browser_service import get_browser_service
 
         try:
             browser_service = get_browser_service()
-            # Only cleanup sessions that haven't been accessed for a long time
-            browser_service.cleanup_expired_sessions()
-            logger.info(
-                "Browser service expired sessions cleaned up, active sessions preserved"
-            )
+            # Cleanup all sessions during shutdown
+            browser_service.cleanup_all_sessions()
+            logger.info("Browser sessions cleaned up")
         except Exception as e:
-            logger.error(f"Error cleaning up browser service: {e}")
+            logger.error(f"Error cleaning up browser sessions: {e}")
+
+        # Close database connections
+        if db_manager:
+            try:
+                db_manager.close()
+                logger.info("Database connections closed")
+            except Exception as e:
+                logger.error(f"Error closing database: {e}")
+
+        logger.info("Graceful shutdown completed")
 
 
 # Create FastAPI app
@@ -274,10 +304,12 @@ async def _health_check_logic():
         logger.error(f"Health check failed: {e}")
         raise HTTPException(status_code=503, detail="Service unavailable")
 
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
     return await _health_check_logic()
+
 
 @app.get("/api/health")
 async def api_health_check():
@@ -624,7 +656,6 @@ async def get_presigned_url(order_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-
 @app.post("/api/orders/{order_id}/resume-nova-act")
 async def resume_nova_act_after_captcha(order_id: str):
     """Resume Nova Act execution after CAPTCHA has been resolved manually"""
@@ -636,42 +667,43 @@ async def resume_nova_act_after_captcha(order_id: str):
         # Only available for Nova Act orders that require human intervention
         if order.automation_method != AutomationMethod.NOVA_ACT:
             raise HTTPException(
-                status_code=400, 
-                detail="Nova Act resume only available for Nova Act orders"
+                status_code=400,
+                detail="Nova Act resume only available for Nova Act orders",
             )
 
         if order.status != OrderStatus.REQUIRES_HUMAN:
             raise HTTPException(
-                status_code=400, 
-                detail=f"Order must be in 'requires_human' status to resume. Current status: {order.status.value}"
+                status_code=400,
+                detail=f"Order must be in 'requires_human' status to resume. Current status: {order.status.value}",
             )
 
         # Get the active agent from the queue
         active_agent = await order_queue.get_active_agent(order_id)
         if not active_agent or not hasattr(active_agent, "resume_after_captcha"):
             raise HTTPException(
-                status_code=400, 
-                detail="Nova Act agent not available or does not support resume functionality"
+                status_code=400,
+                detail="Nova Act agent not available or does not support resume functionality",
             )
 
         # Update order status to processing
         db_manager.update_order_status(order_id, OrderStatus.PROCESSING)
-        
+
         # Broadcast status update
-        await broadcast_update({
-            "type": "order_updated",
-            "order": db_manager.get_order(order_id).to_dict()
-        })
+        await broadcast_update(
+            {"type": "order_updated", "order": db_manager.get_order(order_id).to_dict()}
+        )
 
         # Resume Nova Act execution
         try:
             result = await active_agent.resume_after_captcha(order)
-            
+
             # Update order based on result
             if result.get("success"):
                 db_manager.update_order_status(order_id, OrderStatus.COMPLETED)
                 if result.get("confirmation_number"):
-                    db_manager.update_order(order_id, {"confirmation_number": result["confirmation_number"]})
+                    db_manager.update_order(
+                        order_id, {"confirmation_number": result["confirmation_number"]}
+                    )
             elif result.get("status") == "requires_human":
                 db_manager.update_order_status(order_id, OrderStatus.REQUIRES_HUMAN)
             else:
@@ -680,31 +712,44 @@ async def resume_nova_act_after_captcha(order_id: str):
                     db_manager.update_order(order_id, {"error": result["error"]})
 
             # Broadcast final update
-            await broadcast_update({
-                "type": "order_updated",
-                "order": db_manager.get_order(order_id).to_dict()
-            })
+            await broadcast_update(
+                {
+                    "type": "order_updated",
+                    "order": db_manager.get_order(order_id).to_dict(),
+                }
+            )
 
             return {
                 "success": result.get("success", False),
                 "status": result.get("status", "failed"),
-                "message": result.get("result") or result.get("message") or result.get("error"),
-                "order_id": order_id
+                "message": result.get("result")
+                or result.get("message")
+                or result.get("error"),
+                "order_id": order_id,
             }
 
         except Exception as resume_error:
-            logger.error(f"Failed to resume Nova Act for order {order_id}: {resume_error}")
-            
+            logger.error(
+                f"Failed to resume Nova Act for order {order_id}: {resume_error}"
+            )
+
             # Update order status back to requires_human
             db_manager.update_order_status(order_id, OrderStatus.REQUIRES_HUMAN)
-            db_manager.update_order(order_id, {"error": f"Resume failed: {str(resume_error)}"})
-            
-            await broadcast_update({
-                "type": "order_updated",
-                "order": db_manager.get_order(order_id).to_dict()
-            })
-            
-            raise HTTPException(status_code=500, detail=f"Failed to resume Nova Act: {str(resume_error)}")
+            db_manager.update_order(
+                order_id, {"error": f"Resume failed: {str(resume_error)}"}
+            )
+
+            await broadcast_update(
+                {
+                    "type": "order_updated",
+                    "order": db_manager.get_order(order_id).to_dict(),
+                }
+            )
+
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to resume Nova Act: {str(resume_error)}",
+            )
 
     except HTTPException:
         raise
@@ -719,12 +764,14 @@ async def get_secrets():
     """Get all secret vault entries (passwords masked)"""
     try:
         # Check if database is properly initialized
-        if not hasattr(db_manager, 'get_secrets'):
+        if not hasattr(db_manager, "get_secrets"):
             logger.error("Database manager does not have get_secrets method")
             return {"secrets": []}
-        
+
         secrets = db_manager.get_secrets(include_passwords=False)
-        return {"secrets": [secret.to_dict(include_password=False) for secret in secrets]}
+        return {
+            "secrets": [secret.to_dict(include_password=False) for secret in secrets]
+        }
     except Exception as e:
         logger.error(f"Failed to get secrets: {e}")
         # Return empty list instead of error to prevent frontend infinite loading
@@ -738,16 +785,18 @@ async def create_secret(secret_data: dict):
         required_fields = ["site_name", "site_url"]
         for field in required_fields:
             if field not in secret_data:
-                raise HTTPException(status_code=400, detail=f"Missing required field: {field}")
-        
+                raise HTTPException(
+                    status_code=400, detail=f"Missing required field: {field}"
+                )
+
         secret_id = db_manager.create_secret(
             site_name=secret_data["site_name"],
             site_url=secret_data["site_url"],
             username=secret_data.get("username"),
             password=secret_data.get("password"),
-            additional_fields=secret_data.get("additional_fields", {})
+            additional_fields=secret_data.get("additional_fields", {}),
         )
-        
+
         return {"success": True, "secret_id": secret_id}
     except HTTPException:
         raise
@@ -763,7 +812,7 @@ async def get_secret(secret_id: str, include_password: bool = False):
         secret = db_manager.get_secret(secret_id, include_password=include_password)
         if not secret:
             raise HTTPException(status_code=404, detail="Secret not found")
-        
+
         return secret.to_dict(include_password=include_password)
     except HTTPException:
         raise
@@ -782,12 +831,12 @@ async def update_secret(secret_id: str, secret_data: dict):
             site_url=secret_data.get("site_url"),
             username=secret_data.get("username"),
             password=secret_data.get("password"),
-            additional_fields=secret_data.get("additional_fields")
+            additional_fields=secret_data.get("additional_fields"),
         )
-        
+
         if not success:
             raise HTTPException(status_code=404, detail="Secret not found")
-        
+
         return {"success": True}
     except HTTPException:
         raise
@@ -803,7 +852,7 @@ async def delete_secret(secret_id: str):
         success = db_manager.delete_secret(secret_id)
         if not success:
             raise HTTPException(status_code=404, detail="Secret not found")
-        
+
         return {"success": True}
     except Exception as e:
         logger.error(f"Failed to delete secret {secret_id}: {e}")

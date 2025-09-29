@@ -9,10 +9,45 @@ from typing import Dict, Any, Optional, List
 from strands import tool
 from .browser_manager import BrowserManager
 import os
+import asyncio
+import concurrent.futures
 
-# Create global browser manager instance with region from environment or default
-region = os.getenv('AWS_DEFAULT_REGION', 'us-west-2')
-browser_manager = BrowserManager(region=region)
+# Get global browser manager instance (singleton)
+def get_browser_manager():
+    region = os.getenv('AWS_DEFAULT_REGION', 'us-west-2')
+    return BrowserManager(region=region)
+
+browser_manager = get_browser_manager()
+
+def run_async_safely(coro):
+    """Safely run async coroutine in sync context."""
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            def run_in_new_loop():
+                new_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(new_loop)
+                try:
+                    # Add timeout to prevent hanging
+                    return new_loop.run_until_complete(
+                        asyncio.wait_for(coro, timeout=60.0)  # 60 second overall timeout
+                    )
+                except asyncio.TimeoutError:
+                    logger.error("Async operation timed out after 60 seconds")
+                    raise TimeoutError("Browser operation timed out")
+                finally:
+                    new_loop.close()
+            
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(run_in_new_loop)
+                return future.result(timeout=70)  # Slightly longer than inner timeout
+        else:
+            return loop.run_until_complete(asyncio.wait_for(coro, timeout=60.0))
+    except RuntimeError:
+        return asyncio.run(asyncio.wait_for(coro, timeout=60.0))
+    except (asyncio.TimeoutError, concurrent.futures.TimeoutError, TimeoutError) as e:
+        logger.error(f"Browser operation timed out: {e}")
+        return f"Error: Operation timed out after 60 seconds"
 
 logger = logging.getLogger(__name__)
 
@@ -26,17 +61,20 @@ def browser_install() -> str:
     Returns:
         Session ID that can be used with other browser tools.
     """
+    logger.info("browser_install called - starting browser installation")
     try:
-        # Update region from environment if changed
-        current_region = os.getenv('AWS_DEFAULT_REGION', 'us-west-2')
-        if browser_manager.region != current_region:
-            browser_manager.region = current_region
-            logger.info(f"Updated browser manager region to: {current_region}")
+        # Get current browser manager instance
+        browser_manager = get_browser_manager()
+        logger.info(f"Got browser manager: {browser_manager}")
         
         # Run async operations properly
         async def async_install():
+            logger.info("Initializing browser manager...")
             await browser_manager._async_initialize()
-            return await browser_manager._async_create_session()
+            logger.info("Creating browser session...")
+            session_id = await browser_manager._async_create_session()
+            logger.info(f"Created session: {session_id}")
+            return session_id
         
         # Handle async execution with uvloop compatibility
         try:
@@ -61,9 +99,13 @@ def browser_install() -> str:
             # No event loop, create one
             session_id = asyncio.run(async_install())
         
-        return f"Browser installed successfully. Session ID: {session_id}"
+        result = f"Browser installed successfully. Session ID: {session_id}"
+        logger.info(f"browser_install completed: {result}")
+        return result
     except Exception as e:
         logger.error(f"Failed to install browser: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return f"Error installing browser: {str(e)}"
 
 
@@ -78,29 +120,51 @@ def browser_navigate(session_id: str, url: str) -> str:
     Returns:
         Success or error message
     """
+    logger.info(f"browser_navigate called - session_id: {session_id}, url: {url}")
     try:
-        # Update region from environment if changed
-        current_region = os.getenv('AWS_DEFAULT_REGION', 'us-west-2')
-        if browser_manager.region != current_region:
-            browser_manager.region = current_region
-            logger.info(f"Updated browser manager region to: {current_region}")
-            
+        # Get current browser manager instance
+        browser_manager = get_browser_manager()
         session = browser_manager.get_session(session_id)
         if not session:
+            logger.error(f"Session {session_id} not found in browser manager")
             return f"Error: Session {session_id} not found"
         
+        logger.info(f"Found session: {session}")
         page = session.get_active_page()
         if not page:
+            logger.error("No active page in session")
             return "Error: No active page in session"
         
-        async def _navigate():
-            await page.goto(url)
-            await page.wait_for_load_state("networkidle")
-            return f"Successfully navigated to {url}"
+        logger.info(f"Got active page: {page}")
         
-        return browser_manager._run_async(_navigate())
+        async def _navigate():
+            logger.info(f"Starting navigation to {url}")
+            try:
+                # Add timeout and better error handling
+                await page.goto(url, timeout=30000)  # 30 second timeout
+                logger.info("Page loaded, waiting for domcontentloaded")
+                await page.wait_for_load_state("domcontentloaded", timeout=15000)  # 15 second timeout
+                logger.info(f"Navigation completed to {url}")
+                return f"Successfully navigated to {url}"
+            except Exception as nav_error:
+                logger.error(f"Navigation error: {nav_error}")
+                # Try to get current URL to see if partial navigation worked
+                try:
+                    current_url = page.url
+                    logger.info(f"Current page URL: {current_url}")
+                    if current_url != "about:blank":
+                        return f"Partially navigated to {current_url} (timeout occurred)"
+                except Exception:
+                    pass
+                raise nav_error
+        
+        result = run_async_safely(_navigate())
+        logger.info(f"browser_navigate completed: {result}")
+        return result
     except Exception as e:
         logger.error(f"Navigation failed: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return f"Error navigating to {url}: {str(e)}"
 
 
@@ -128,7 +192,7 @@ def browser_click(session_id: str, selector: str) -> str:
             await page.click(selector)
             return f"Successfully clicked element: {selector}"
         
-        return browser_manager._run_async(_click())
+        return run_async_safely(_click())
     except Exception as e:
         logger.error(f"Click failed: {e}")
         return f"Error clicking {selector}: {str(e)}"
@@ -159,7 +223,7 @@ def browser_type(session_id: str, selector: str, text: str) -> str:
             await page.fill(selector, text)
             return f"Successfully typed text into {selector}"
         
-        return browser_manager._run_async(_type())
+        return run_async_safely(_type())
     except Exception as e:
         logger.error(f"Type failed: {e}")
         return f"Error typing into {selector}: {str(e)}"
@@ -190,7 +254,7 @@ def browser_fill_form(session_id: str, form_data: Dict[str, str]) -> str:
                 await page.fill(selector, value)
             return f"Successfully filled {len(form_data)} form fields"
         
-        return browser_manager._run_async(_fill_form())
+        return run_async_safely(_fill_form())
     except Exception as e:
         logger.error(f"Form fill failed: {e}")
         return f"Error filling form: {str(e)}"
@@ -229,7 +293,7 @@ def browser_take_screenshot(session_id: str, path: str = None) -> str:
             await page.screenshot(path=screenshot_path)
             return f"Screenshot saved to {screenshot_path}"
         
-        return browser_manager._run_async(_screenshot())
+        return run_async_safely(_screenshot())
     except Exception as e:
         logger.error(f"Screenshot failed: {e}")
         return f"Error taking screenshot: {str(e)}"
@@ -259,7 +323,7 @@ def browser_evaluate(session_id: str, script: str) -> str:
             result = await page.evaluate(script)
             return f"Script result: {result}"
         
-        return browser_manager._run_async(_evaluate())
+        return run_async_safely(_evaluate())
     except Exception as e:
         logger.error(f"Script evaluation failed: {e}")
         return f"Error executing script: {str(e)}"
@@ -290,7 +354,7 @@ def browser_wait_for(session_id: str, selector: str, timeout: int = 30000) -> st
             await page.wait_for_selector(selector, timeout=timeout)
             return f"Element {selector} appeared on page"
         
-        return browser_manager._run_async(_wait())
+        return run_async_safely(_wait())
     except Exception as e:
         logger.error(f"Wait failed: {e}")
         return f"Error waiting for {selector}: {str(e)}"
@@ -320,7 +384,7 @@ def browser_press_key(session_id: str, key: str) -> str:
             await page.keyboard.press(key)
             return f"Successfully pressed key: {key}"
         
-        return browser_manager._run_async(_press())
+        return run_async_safely(_press())
     except Exception as e:
         logger.error(f"Key press failed: {e}")
         return f"Error pressing key {key}: {str(e)}"
@@ -350,7 +414,7 @@ def browser_hover(session_id: str, selector: str) -> str:
             await page.hover(selector)
             return f"Successfully hovered over: {selector}"
         
-        return browser_manager._run_async(_hover())
+        return run_async_safely(_hover())
     except Exception as e:
         logger.error(f"Hover failed: {e}")
         return f"Error hovering over {selector}: {str(e)}"
@@ -381,7 +445,7 @@ def browser_select_option(session_id: str, selector: str, value: str) -> str:
             await page.select_option(selector, value)
             return f"Successfully selected {value} in {selector}"
         
-        return browser_manager._run_async(_select())
+        return run_async_safely(_select())
     except Exception as e:
         logger.error(f"Select failed: {e}")
         return f"Error selecting option in {selector}: {str(e)}"
@@ -415,7 +479,7 @@ def browser_file_upload(session_id: str, selector: str, file_path: str) -> str:
             await page.set_input_files(selector, file_path)
             return f"Successfully uploaded {file_path} to {selector}"
         
-        return browser_manager._run_async(_upload())
+        return run_async_safely(_upload())
     except Exception as e:
         logger.error(f"File upload failed: {e}")
         return f"Error uploading file: {str(e)}"
@@ -455,7 +519,7 @@ def browser_handle_dialog(session_id: str, action: str, text: str = "") -> str:
             page.on("dialog", dialog_handler)
             return f"Dialog handler set for {action}"
         
-        return browser_manager._run_async(_handle_dialog())
+        return run_async_safely(_handle_dialog())
     except Exception as e:
         logger.error(f"Dialog handling failed: {e}")
         return f"Error handling dialog: {str(e)}"
@@ -486,7 +550,7 @@ def browser_drag(session_id: str, source_selector: str, target_selector: str) ->
             await page.drag_and_drop(source_selector, target_selector)
             return f"Successfully dragged from {source_selector} to {target_selector}"
         
-        return browser_manager._run_async(_drag())
+        return run_async_safely(_drag())
     except Exception as e:
         logger.error(f"Drag and drop failed: {e}")
         return f"Error dragging element: {str(e)}"
@@ -517,7 +581,7 @@ def browser_resize(session_id: str, width: int, height: int) -> str:
             await page.set_viewport_size({"width": width, "height": height})
             return f"Successfully resized viewport to {width}x{height}"
         
-        return browser_manager._run_async(_resize())
+        return run_async_safely(_resize())
     except Exception as e:
         logger.error(f"Resize failed: {e}")
         return f"Error resizing viewport: {str(e)}"
@@ -574,7 +638,7 @@ def browser_tabs(session_id: str, action: str, tab_id: str = None, url: str = No
             else:
                 return f"Error: Unknown action {action}"
         
-        return browser_manager._run_async(_manage_tabs())
+        return run_async_safely(_manage_tabs())
     except Exception as e:
         logger.error(f"Tab management failed: {e}")
         return f"Error managing tabs: {str(e)}"
@@ -603,7 +667,7 @@ def browser_navigate_back(session_id: str) -> str:
             await page.go_back()
             return "Successfully navigated back"
         
-        return browser_manager._run_async(_back())
+        return run_async_safely(_back())
     except Exception as e:
         logger.error(f"Navigate back failed: {e}")
         return f"Error navigating back: {str(e)}"
@@ -630,21 +694,29 @@ def browser_snapshot(session_id: str, selector: str = None) -> str:
             return "Error: No active page in session"
         
         async def _snapshot():
-            if selector:
-                element = await page.query_selector(selector)
-                if not element:
-                    return f"Error: Element {selector} not found"
-                html = await element.inner_html()
-            else:
-                html = await page.content()
-            
-            # Truncate long HTML
-            if len(html) > 2000:
-                html = html[:2000] + "... [truncated]"
-            
-            return html
+            try:
+                # Get current URL first
+                current_url = page.url
+                logger.info(f"Taking snapshot of page: {current_url}")
+                
+                if selector:
+                    element = await page.query_selector(selector)
+                    if not element:
+                        return f"Error: Element {selector} not found on {current_url}"
+                    html = await element.inner_html()
+                else:
+                    html = await page.content()
+                
+                # Truncate long HTML
+                if len(html) > 2000:
+                    html = html[:2000] + "... [truncated]"
+                
+                return f"Page: {current_url}\n\nHTML Content:\n{html}"
+            except Exception as e:
+                logger.error(f"Snapshot error: {e}")
+                return f"Error taking snapshot: {str(e)}"
         
-        return browser_manager._run_async(_snapshot())
+        return run_async_safely(_snapshot())
     except Exception as e:
         logger.error(f"Snapshot failed: {e}")
         return f"Error getting snapshot: {str(e)}"
@@ -681,7 +753,7 @@ def browser_network_requests(session_id: str, action: str = "start") -> str:
                 page.remove_all_listeners("request")
                 return "Network request monitoring stopped"
         
-        return browser_manager._run_async(_network())
+        return run_async_safely(_network())
     except Exception as e:
         logger.error(f"Network monitoring failed: {e}")
         return f"Error with network monitoring: {str(e)}"
@@ -718,7 +790,7 @@ def browser_console_messages(session_id: str, action: str = "start") -> str:
                 page.remove_all_listeners("console")
                 return "Console message monitoring stopped"
         
-        return browser_manager._run_async(_console())
+        return run_async_safely(_console())
     except Exception as e:
         logger.error(f"Console monitoring failed: {e}")
         return f"Error with console monitoring: {str(e)}"

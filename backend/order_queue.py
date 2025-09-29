@@ -416,20 +416,30 @@ class OrderQueue:
                 )
                 logger.error(f"Order {order.id} failed: {result.get('error')}")
 
-                # Clean up agent resources for failed orders
-                await agent.cleanup()
-
-                # Remove from active agents
-                if order.id in self.active_agents:
-                    del self.active_agents[order.id]
+                # Clean up agent resources for failed orders with timeout
+                try:
+                    await asyncio.wait_for(agent.cleanup(force=True), timeout=10.0)
+                except asyncio.TimeoutError:
+                    logger.warning(f"Agent cleanup timed out for failed order {order.id}")
+                except Exception as cleanup_error:
+                    logger.error(f"Agent cleanup failed for order {order.id}: {cleanup_error}")
+                finally:
+                    # Always remove from active agents
+                    if order.id in self.active_agents:
+                        del self.active_agents[order.id]
 
             # Clean up agent resources only for completed orders
             if result.get("success"):
-                await agent.cleanup()
-
-                # Remove from active agents
-                if order.id in self.active_agents:
-                    del self.active_agents[order.id]
+                try:
+                    await asyncio.wait_for(agent.cleanup(), timeout=10.0)
+                except asyncio.TimeoutError:
+                    logger.warning(f"Agent cleanup timed out for successful order {order.id}")
+                except Exception as cleanup_error:
+                    logger.error(f"Agent cleanup failed for order {order.id}: {cleanup_error}")
+                finally:
+                    # Always remove from active agents
+                    if order.id in self.active_agents:
+                        del self.active_agents[order.id]
 
         except Exception as e:
             import traceback
@@ -460,17 +470,22 @@ class OrderQueue:
             except Exception as db_error:
                 logger.error(f"Failed to update order status: {db_error}")
 
-            # Clean up agent on error
+            # Clean up agent on error with timeout
             if order.id in self.active_agents:
                 try:
                     agent = self.active_agents[order.id]
-                    await agent.cleanup(force=True)  # Force cleanup on error
+                    # Use asyncio.wait_for to prevent hanging
+                    await asyncio.wait_for(agent.cleanup(force=True), timeout=10.0)
+                except asyncio.TimeoutError:
+                    logger.warning(f"Agent cleanup timed out for order {order.id}")
                 except Exception as cleanup_error:
                     logger.error(
                         f"Failed to cleanup agent for order {order.id}: {cleanup_error}"
                     )
                 finally:
-                    del self.active_agents[order.id]
+                    # Always remove from active agents
+                    if order.id in self.active_agents:
+                        del self.active_agents[order.id]
 
     async def add_order(
         self,

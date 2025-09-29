@@ -46,7 +46,7 @@ class BrowserSession:
     manual_control: bool = False
     page: Any = None  # Playwright page object
     current_url: str = "about:blank"
-    
+
     # Additional Playwright components
     playwright: Any = None
     browser: Any = None
@@ -80,35 +80,37 @@ class BrowserService:
         try:
             if not boto3 or not get_control_plane_endpoint:
                 raise ImportError("Required AWS packages not available")
-            
+
             logger.info(f"Creating browser with recording for session {session_id}")
-            
+
             # Create control plane client
             region = self.config.get("agentcore_region", "us-west-2")
             control_plane_url = get_control_plane_endpoint(region)
             control_client = boto3.client(
                 "bedrock-agentcore-control",
                 region_name=region,
-                endpoint_url=control_plane_url
+                endpoint_url=control_plane_url,
             )
 
             # Create browser with recording
             browser_name = f"order_automation_{session_id[:8]}"
             s3_bucket = self.config.get("session_replay_s3_bucket", "sanghwa-oregon")
-            s3_prefix = self.config.get("session_replay_s3_prefix", f"session-replays/{session_id}/")
-            recording_role_arn = self.config.get("recording_role_arn") or os.getenv("AGENTCORE_EXECUTION_ROLE_ARN")
+            s3_prefix = self.config.get(
+                "session_replay_s3_prefix", f"session-replays/{session_id}/"
+            )
+            execution_role_arn = self.config.get("execution_role_arn")
 
             logger.info(f"Browser name: {browser_name}")
             logger.info(f"S3 location: s3://{s3_bucket}/{s3_prefix}")
 
-            if recording_role_arn:
+            if execution_role_arn:
                 response = control_client.create_browser(
                     name=browser_name,
-                    executionRoleArn=recording_role_arn,
+                    executionRoleArn=execution_role_arn,
                     networkConfiguration={"networkMode": "PUBLIC"},
                     recording={
                         "enabled": True,
-                        "s3Location": {"bucket": s3_bucket, "prefix": s3_prefix}
+                        "s3Location": {"bucket": s3_bucket, "prefix": s3_prefix},
                     },
                     browserConfiguration={
                         "args": [
@@ -120,9 +122,9 @@ class BrowserService:
                             "--ignore-certificate-errors",
                             "--ignore-ssl-errors",
                             "--ignore-certificate-errors-spki-list",
-                            "--disable-extensions"
+                            "--disable-extensions",
                         ]
-                    }
+                    },
                 )
             else:
                 response = control_client.create_browser(
@@ -138,9 +140,9 @@ class BrowserService:
                             "--ignore-certificate-errors",
                             "--ignore-ssl-errors",
                             "--ignore-certificate-errors-spki-list",
-                            "--disable-extensions"
+                            "--disable-extensions",
                         ]
-                    }
+                    },
                 )
 
             browser_id = response["browserId"]
@@ -153,23 +155,29 @@ class BrowserService:
             logger.error(f"Failed to create browser with recording: {e}")
             raise e
 
-    async def initialize_browser_session_async(self, session_id: str, browser_id: str) -> Dict[str, Any]:
+    async def initialize_browser_session_async(
+        self, session_id: str, browser_id: str
+    ) -> Dict[str, Any]:
         """Initialize browser session with Playwright connection."""
         try:
             from bedrock_agentcore.tools.browser_client import BrowserClient
             from playwright.async_api import async_playwright
-            
+
             logger.info(f"Initializing browser session {session_id}")
-            
+
             # Create BrowserClient from SDK
-            browser_client = BrowserClient(region=self.config.get("region", "us-west-2"))
+            browser_client = BrowserClient(
+                region=self.config.get("region", "us-west-2")
+            )
             browser_client.identifier = browser_id
 
             # Start a session
             agentcore_session_id = browser_client.start(
                 identifier=browser_id,
                 name=f"order_session_{datetime.now().strftime('%Y%m%d-%H%M%S')}",
-                session_timeout_seconds=self.config.get("browser_session_timeout", 3600)
+                session_timeout_seconds=self.config.get(
+                    "browser_session_timeout", 3600
+                ),
             )
 
             logger.info(f"AgentCore session started: {agentcore_session_id}")
@@ -183,15 +191,15 @@ class BrowserService:
 
             # Initialize Playwright with CDP
             playwright = await async_playwright().start()
-            
+
             # Connect to the browser via CDP with HTTP/2 support
             browser = await playwright.chromium.connect_over_cdp(
-                ws_url, 
+                ws_url,
                 headers=headers,
                 # Add timeout and other options
-                timeout=60000
+                timeout=60000,
             )
-            
+
             # Get context and page
             context = browser.contexts[0]
             page = context.pages[0]
@@ -205,7 +213,7 @@ class BrowserService:
                 "context": context,
                 "page": page,
                 "ws_url": ws_url,
-                "agentcore_session_id": agentcore_session_id
+                "agentcore_session_id": agentcore_session_id,
             }
 
         except Exception as e:
@@ -238,18 +246,16 @@ class BrowserService:
             s3_prefix = self.config.get(
                 "session_replay_s3_prefix", f"session-replays/{session_id}/"
             )
-            recording_role_arn = self.config.get("recording_role_arn") or os.getenv(
-                "AGENTCORE_EXECUTION_ROLE_ARN"
-            )
+            execution_role_arn = self.config.get("execution_role_arn")
 
             logger.info(f"Browser name: {browser_name}")
             logger.info(f"S3 location: s3://{s3_bucket}/{s3_prefix}")
 
-            if recording_role_arn:
+            if execution_role_arn:
                 # Create browser with recording if role is available
                 response = control_client.create_browser(
                     name=browser_name,
-                    executionRoleArn=recording_role_arn,
+                    executionRoleArn=execution_role_arn,
                     networkConfiguration={"networkMode": "PUBLIC"},
                     recording={
                         "enabled": True,
@@ -266,9 +272,9 @@ class BrowserService:
                             "--ignore-certificate-errors",
                             "--ignore-ssl-errors",
                             "--ignore-certificate-errors-spki-list",
-                            "--disable-extensions"
+                            "--disable-extensions",
                         ]
-                    }
+                    },
                 )
                 logger.info(f"Created browser with recording: {browser_name}")
             else:
@@ -290,9 +296,9 @@ class BrowserService:
                             "--ignore-certificate-errors",
                             "--ignore-ssl-errors",
                             "--ignore-certificate-errors-spki-list",
-                            "--disable-extensions"
+                            "--disable-extensions",
                         ]
-                    }
+                    },
                 )
                 logger.info(f"Created browser without recording: {browser_name}")
 
@@ -323,23 +329,27 @@ class BrowserService:
                 try:
                     if AgentCoreBrowserClient and boto3:
                         # Create browser with recording
-                        browser_id, recording_config = self.create_browser_with_recording_real(session_id)
-                        
+                        browser_id, recording_config = (
+                            self.create_browser_with_recording_real(session_id)
+                        )
+
                         # Create browser client
                         region = self.config.get("agentcore_region", "us-west-2")
                         browser_client = AgentCoreBrowserClient(region=region)
                         browser_client.identifier = browser_id
-                        
+
                         # Start session
                         agentcore_session_id = browser_client.start(
                             identifier=browser_id,
                             name=f"order_session_{datetime.now().strftime('%Y%m%d-%H%M%S')}",
-                            session_timeout_seconds=self.config.get("browser_session_timeout", 3600)
+                            session_timeout_seconds=self.config.get(
+                                "browser_session_timeout", 3600
+                            ),
                         )
-                        
+
                         # Get WebSocket URL
                         ws_url, headers = browser_client.generate_ws_headers()
-                        
+
                         # Create session record
                         browser_session = BrowserSession(
                             session_id=session_id,
@@ -354,14 +364,16 @@ class BrowserService:
                             page=None,
                             current_url="about:blank",
                             ws_url=ws_url,
-                            agentcore_session_id=agentcore_session_id
+                            agentcore_session_id=agentcore_session_id,
                         )
-                        
+
                         # Store session
                         self.active_sessions[session_id] = browser_session
-                        
-                        logger.info(f"AgentCore browser session {session_id} created successfully")
-                        
+
+                        logger.info(
+                            f"AgentCore browser session {session_id} created successfully"
+                        )
+
                         return {
                             "session_id": session_id,
                             "browser_id": browser_id,
@@ -371,11 +383,13 @@ class BrowserService:
                             "recording_location": f"s3://{recording_config.get('s3Location', {}).get('bucket', '')}/{recording_config.get('s3Location', {}).get('prefix', '')}",
                             "created_at": datetime.now().isoformat(),
                             "ws_url": ws_url,
-                            "page_available": False  # Will be set when Playwright connects
+                            "page_available": False,  # Will be set when Playwright connects
                         }
-                        
+
                 except Exception as agentcore_error:
-                    logger.warning(f"AgentCore browser creation failed: {agentcore_error}")
+                    logger.warning(
+                        f"AgentCore browser creation failed: {agentcore_error}"
+                    )
                     # Fall back to simplified session
                     pass
 
@@ -393,7 +407,7 @@ class BrowserService:
                     page=None,
                     current_url="about:blank",
                     ws_url=None,
-                    agentcore_session_id=session_id
+                    agentcore_session_id=session_id,
                 )
 
                 # Store session
@@ -410,7 +424,7 @@ class BrowserService:
                     "recording_location": "",
                     "created_at": datetime.now().isoformat(),
                     "ws_url": None,
-                    "page_available": False
+                    "page_available": False,
                 }
 
         except Exception as e:
@@ -442,8 +456,6 @@ class BrowserService:
             logger.error(f"Failed to get session info for {session_id}: {e}")
             return {"exists": False, "status": "error", "error": str(e)}
 
-
-
     def get_live_view_url(self, session_id: str, expires: int = 300) -> Dict[str, Any]:
         """Get live view URL for browser session"""
         try:
@@ -455,49 +467,69 @@ class BrowserService:
                     browser_client = self.active_clients.get(session_id)
                     if not browser_client:
                         return {"url": None, "error": f"Session {session_id} not found"}
-                    
+
                     # Create a temporary session object for the client
-                    session = type('TempSession', (), {
-                        'browser_client': browser_client,
-                        'manual_control': False,
-                        'resolution': {"width": 1280, "height": 720},
-                        'current_url': 'about:blank'
-                    })()
+                    session = type(
+                        "TempSession",
+                        (),
+                        {
+                            "browser_client": browser_client,
+                            "manual_control": False,
+                            "resolution": {"width": 1280, "height": 720},
+                            "current_url": "about:blank",
+                        },
+                    )()
 
                 # Update last accessed time if it's a real session
-                if hasattr(session, 'last_accessed'):
+                if hasattr(session, "last_accessed"):
                     session.last_accessed = datetime.now(timezone.utc)
 
                 # Try to get live view URL from browser client
                 live_view_url = None
                 browser_client = session.browser_client
-                
+
                 if browser_client:
                     # Method 1: Try generate_live_view_url with proper error handling
                     if hasattr(browser_client, "generate_live_view_url"):
                         try:
-                            live_view_url = browser_client.generate_live_view_url(expires=expires)
-                            logger.info(f"Generated live view URL using generate_live_view_url: {session_id}")
+                            live_view_url = browser_client.generate_live_view_url(
+                                expires=expires
+                            )
+                            logger.info(
+                                f"Generated live view URL using generate_live_view_url: {session_id}"
+                            )
                         except Exception as e:
                             logger.warning(f"generate_live_view_url failed: {e}")
-                    
+
                     # Method 2: Try get_live_view_url (alternative method name)
-                    if not live_view_url and hasattr(browser_client, "get_live_view_url"):
+                    if not live_view_url and hasattr(
+                        browser_client, "get_live_view_url"
+                    ):
                         try:
-                            live_view_url = browser_client.get_live_view_url(expires=expires)
-                            logger.info(f"Generated live view URL using get_live_view_url: {session_id}")
+                            live_view_url = browser_client.get_live_view_url(
+                                expires=expires
+                            )
+                            logger.info(
+                                f"Generated live view URL using get_live_view_url: {session_id}"
+                            )
                         except Exception as e:
                             logger.warning(f"get_live_view_url failed: {e}")
-                    
+
                     # Method 3: Try to generate WebSocket headers as fallback
-                    if not live_view_url and hasattr(browser_client, "generate_ws_headers"):
+                    if not live_view_url and hasattr(
+                        browser_client, "generate_ws_headers"
+                    ):
                         try:
                             ws_url, headers = browser_client.generate_ws_headers()
                             # Convert WebSocket URL to live view URL format
-                            if ws_url and ws_url.startswith('wss://'):
+                            if ws_url and ws_url.startswith("wss://"):
                                 # Replace wss:// with https:// for live view
-                                live_view_url = ws_url.replace('wss://', 'https://').replace('/browser', '/live-view')
-                            logger.info(f"Generated live view URL from WebSocket: {session_id}")
+                                live_view_url = ws_url.replace(
+                                    "wss://", "https://"
+                                ).replace("/browser", "/live-view")
+                            logger.info(
+                                f"Generated live view URL from WebSocket: {session_id}"
+                            )
                         except Exception as e:
                             logger.warning(f"generate_ws_headers failed: {e}")
 
@@ -505,18 +537,22 @@ class BrowserService:
                     return {
                         "url": live_view_url,
                         "session_id": session_id,
-                        "browser_id": getattr(session, 'browser_id', f"browser_{session_id[:8]}"),
+                        "browser_id": getattr(
+                            session, "browser_id", f"browser_{session_id[:8]}"
+                        ),
                         "expires": expires,
                         "type": "dcv",
-                        "manual_control": getattr(session, 'manual_control', False),
-                        "resolution": getattr(session, 'resolution', {"width": 1280, "height": 720}),
-                        "current_url": getattr(session, 'current_url', 'about:blank')
+                        "manual_control": getattr(session, "manual_control", False),
+                        "resolution": getattr(
+                            session, "resolution", {"width": 1280, "height": 720}
+                        ),
+                        "current_url": getattr(session, "current_url", "about:blank"),
                     }
                 else:
                     return {
                         "url": None,
                         "error": "Unable to generate live view URL - AgentCore session not active",
-                        "session_id": session_id
+                        "session_id": session_id,
                     }
 
         except Exception as e:
@@ -754,25 +790,31 @@ class BrowserService:
                 # Clean up session
                 if session_id in self.active_sessions:
                     session = self.active_sessions[session_id]
-                    
+
                     # Clean up Playwright resources
                     async def cleanup_playwright():
                         try:
-                            if hasattr(session, 'browser') and session.browser:
+                            if hasattr(session, "browser") and session.browser:
                                 await session.browser.close()
-                                logger.info(f"Closed Playwright browser for session {session_id}")
-                            if hasattr(session, 'playwright') and session.playwright:
+                                logger.info(
+                                    f"Closed Playwright browser for session {session_id}"
+                                )
+                            if hasattr(session, "playwright") and session.playwright:
                                 await session.playwright.stop()
-                                logger.info(f"Stopped Playwright for session {session_id}")
+                                logger.info(
+                                    f"Stopped Playwright for session {session_id}"
+                                )
                         except Exception as e:
-                            logger.warning(f"Error cleaning up Playwright resources: {e}")
-                    
+                            logger.warning(
+                                f"Error cleaning up Playwright resources: {e}"
+                            )
+
                     # Run Playwright cleanup
                     try:
                         asyncio.run(cleanup_playwright())
                     except Exception as e:
                         logger.warning(f"Failed to run Playwright cleanup: {e}")
-                    
+
                     # Clean up browser client
                     try:
                         if hasattr(session.browser_client, "stop"):
@@ -873,6 +915,25 @@ class BrowserService:
         except Exception as e:
             logger.error(f"Error in browser cleanup: {e}")
 
+    def cleanup_all_sessions(self):
+        """Cleanup all active sessions during shutdown"""
+        try:
+            with self.session_lock:
+                session_ids = list(self.active_sessions.keys())
+            
+            for session_id in session_ids:
+                try:
+                    logger.info(f"Cleaning up browser session during shutdown: {session_id}")
+                    self.cleanup_session(session_id)
+                except Exception as e:
+                    logger.error(f"Error cleaning up session {session_id}: {e}")
+            
+            if session_ids:
+                logger.info(f"Cleaned up {len(session_ids)} browser sessions during shutdown")
+                
+        except Exception as e:
+            logger.error(f"Error in shutdown cleanup: {e}")
+
     def shutdown(self):
         """Shutdown the service and cleanup all sessions"""
         logger.info("Shutting down BrowserService")
@@ -912,61 +973,78 @@ class BrowserService:
 
                 # Ensure directory exists
                 import os
+
                 os.makedirs(os.path.dirname(screenshot_path), exist_ok=True)
 
                 # Try Playwright page screenshot first
-                if hasattr(session, 'page') and session.page:
+                if hasattr(session, "page") and session.page:
                     try:
                         import asyncio
-                        
+
                         async def take_screenshot_async():
-                            await session.page.screenshot(path=screenshot_path, full_page=True)
+                            await session.page.screenshot(
+                                path=screenshot_path, full_page=True
+                            )
                             return True
-                        
+
                         # Handle async execution properly
                         try:
                             loop = asyncio.get_event_loop()
                             if loop.is_running():
                                 # Use thread-safe execution
-                                future = asyncio.run_coroutine_threadsafe(take_screenshot_async(), loop)
+                                future = asyncio.run_coroutine_threadsafe(
+                                    take_screenshot_async(), loop
+                                )
                                 result = future.result(timeout=30)
                             else:
                                 result = asyncio.run(take_screenshot_async())
-                            
-                            logger.info(f"Playwright screenshot successful: {session_id}")
+
+                            logger.info(
+                                f"Playwright screenshot successful: {session_id}"
+                            )
                             return {
                                 "success": True,
                                 "path": screenshot_path,
                                 "method": "playwright_page",
                                 "message": f"Screenshot saved to {screenshot_path}",
-                                "description": description
+                                "description": description,
                             }
                         except Exception as async_error:
-                            logger.error(f"Async screenshot execution failed: {async_error}")
+                            logger.error(
+                                f"Async screenshot execution failed: {async_error}"
+                            )
                             # Fall through to browser client method
                     except Exception as playwright_error:
-                        logger.warning(f"Playwright screenshot failed: {playwright_error}")
+                        logger.warning(
+                            f"Playwright screenshot failed: {playwright_error}"
+                        )
                         # Fall through to browser client method
 
                 # Try browser client screenshot as fallback
-                if session.browser_client and hasattr(session.browser_client, 'take_screenshot'):
+                if session.browser_client and hasattr(
+                    session.browser_client, "take_screenshot"
+                ):
                     try:
                         session.browser_client.take_screenshot(screenshot_path)
-                        logger.info(f"Browser client screenshot successful: {session_id}")
+                        logger.info(
+                            f"Browser client screenshot successful: {session_id}"
+                        )
                         return {
                             "success": True,
                             "path": screenshot_path,
                             "method": "browser_client",
                             "message": f"Screenshot saved to {screenshot_path}",
-                            "description": description
+                            "description": description,
                         }
                     except Exception as client_error:
-                        logger.error(f"Browser client screenshot failed: {client_error}")
+                        logger.error(
+                            f"Browser client screenshot failed: {client_error}"
+                        )
 
                 # No screenshot method available
                 return {
                     "success": False,
-                    "error": "No screenshot method available - neither Playwright page nor browser client supports screenshots"
+                    "error": "No screenshot method available - neither Playwright page nor browser client supports screenshots",
                 }
 
         except Exception as e:
