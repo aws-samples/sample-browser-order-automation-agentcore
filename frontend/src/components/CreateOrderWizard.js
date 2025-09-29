@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Wizard,
   Container,
@@ -7,12 +7,7 @@ import {
   FormField,
   Input,
   Select,
-  Textarea,
   Cards,
-  Box,
-  Badge,
-  StatusIndicator,
-  Button,
   Alert,
   ColumnLayout
 } from '@cloudscape-design/components';
@@ -59,14 +54,7 @@ const CreateOrderWizard = ({ visible, onDismiss, onSubmit, addNotification }) =>
 
   const [errors, setErrors] = useState({});
 
-  // Fetch retailers on mount
-  useEffect(() => {
-    if (visible) {
-      fetchRetailers();
-    }
-  }, [visible]);
-
-  const fetchRetailers = async () => {
+  const fetchRetailers = useCallback(async () => {
     try {
       setLoading(true);
       const response = await fetch('/api/config/retailers');
@@ -84,7 +72,14 @@ const CreateOrderWizard = ({ visible, onDismiss, onSubmit, addNotification }) =>
     } finally {
       setLoading(false);
     }
-  };
+  }, [addNotification]);
+
+  // Fetch retailers on mount
+  useEffect(() => {
+    if (visible) {
+      fetchRetailers();
+    }
+  }, [visible, fetchRetailers]);
 
   const updateFormData = (path, value) => {
     setFormData(prev => {
@@ -138,6 +133,10 @@ const CreateOrderWizard = ({ visible, onDismiss, onSubmit, addNotification }) =>
         if (!formData.shipping_address.state) newErrors['shipping_address.state'] = 'State is required';
         if (!formData.shipping_address.postal_code) newErrors['shipping_address.postal_code'] = 'Postal code is required';
         break;
+      
+      default:
+        // No validation needed for other steps
+        break;
 
       case 4: // Payment & Review
         if (!formData.payment_info.cardholder_name) newErrors['payment_info.cardholder_name'] = 'Cardholder name is required';
@@ -148,11 +147,7 @@ const CreateOrderWizard = ({ visible, onDismiss, onSubmit, addNotification }) =>
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleNext = () => {
-    if (validateStep(activeStepIndex)) {
-      setActiveStepIndex(prev => prev + 1);
-    }
-  };
+
 
   const handleSubmit = async () => {
     if (!validateStep(activeStepIndex)) return;
@@ -216,7 +211,7 @@ const CreateOrderWizard = ({ visible, onDismiss, onSubmit, addNotification }) =>
 
   const automationMethodOptions = formData.retailer && retailers[formData.retailer] 
     ? retailers[formData.retailer].automation_methods?.map(method => ({
-        label: method === 'strands_agent' ? 'Nova Agent' : 'Playwright MCP',
+        label: method === 'strands_agent' ? 'Nova Agent' : 'Strands Browser Tools',
         value: method,
         description: method === 'strands_agent' 
           ? 'AI-powered browser automation with natural language commands'
@@ -516,7 +511,7 @@ const CreateOrderWizard = ({ visible, onDismiss, onSubmit, addNotification }) =>
               <ColumnLayout columns={2}>
                 <SpaceBetween size="s">
                   <div><strong>Retailer:</strong> {retailers[formData.retailer]?.name || formData.retailer}</div>
-                  <div><strong>Method:</strong> {formData.automation_method === 'strands_agent' ? 'Nova Agent' : 'Playwright MCP'}</div>
+                  <div><strong>Method:</strong> {formData.automation_method === 'strands_agent' ? 'Nova Agent' : 'Strands Browser Tools'}</div>
                   <div><strong>AI Model:</strong> {formData.ai_model.includes('claude') ? 'Claude' : formData.ai_model.includes('nova') ? 'Nova' : 'GPT'}</div>
                   <div><strong>Product:</strong> {formData.product.name}</div>
                   <div><strong>Customer:</strong> {formData.customer_name}</div>

@@ -1,34 +1,42 @@
 #!/usr/bin/env python3
 """
 Nova Act + AgentCore Browser Agent
-Simple integration for e-commerce automation
+Unified implementation with worker process support for non-blocking operation
 """
 
 import os
+import sys
 import logging
-import base64
-import uuid
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any
 
+# Add parent directory to path for config import
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from config import get_config_manager
+
 try:
-    from bedrock_agentcore.tools.browser_client import browser_session
+    from bedrock_agentcore.tools.browser_client import browser_session, BrowserClient
+    from bedrock_agentcore._utils.endpoints import get_control_plane_endpoint
     from nova_act import NovaAct
     from strands import Agent
     from strands.models import BedrockModel
+    import boto3
 except ImportError as e:
     print(f"Warning: Required packages not installed: {e}")
     browser_session = None
+    BrowserClient = None
+    get_control_plane_endpoint = None
     NovaAct = None
     Agent = None
     BedrockModel = None
+    boto3 = None
 
 logger = logging.getLogger(__name__)
 
 
 class NovaActAgent:
-    """Nova Act + AgentCore Browser Agent for e-commerce automation"""
+    """Nova Act + AgentCore Browser Agent with worker process support"""
 
     def __init__(
         self, config: Dict[str, Any], retailer_config: Dict[str, Any], db_manager=None
@@ -41,9 +49,17 @@ class NovaActAgent:
         self.agentcore_context = None
         self.nova_session = None
         self.strands_agent = None
-        self.api_key = os.getenv(
-            "NOVA_ACT_API_KEY", "46775fb2-8640-408c-8a94-761b2bfd0d80"
-        )
+        self.worker = None
+        self.worker_session_id = None
+        
+        # Get config from DB via ConfigManager
+        self.config_manager = get_config_manager(db_manager)
+        self.agent_config = self.config_manager.get_agent_config("nova_act")
+        
+        # Get API key from agent config (database settings only)
+        self.api_key = self.agent_config.nova_act_api_key or ""
+        
+        logger.info(f"Nova Act agent initialized with API key: {self.api_key[:10]}..." if self.api_key else "No API key found")
 
         # Create screenshots directory
         self.screenshots_dir = os.path.join(
@@ -51,37 +67,333 @@ class NovaActAgent:
         )
         os.makedirs(self.screenshots_dir, exist_ok=True)
 
+        # Initialize worker if available
+        try:
+            from services.nova_act_worker import get_nova_act_worker
+            self.worker = get_nova_act_worker()
+            logger.info("Nova Act worker initialized")
+        except ImportError:
+            logger.warning("Nova Act worker not available")
+            self.worker = None
+
         if not browser_session or not NovaAct or not Agent or not BedrockModel:
             raise ImportError("Required packages not available")
 
     def _add_log(self, level: str, message: str, step: str = None):
-        """Add execution log entry"""
+        """Add execution log entry with real-time broadcast"""
         if self.db_manager and self.session_id:
             try:
                 self.db_manager.add_execution_log(self.session_id, level, message, step)
+                
+                # Broadcast log update in real-time
+                try:
+                    from app import broadcast_update
+                    
+                    log_data = {
+                        "type": "log_update",
+                        "order_id": self.session_id,
+                        "log": {
+                            "level": level,
+                            "message": message,
+                            "step": step,
+                            "timestamp": datetime.now(timezone.utc).isoformat()
+                        }
+                    }
+                    
+                    # Try to broadcast (non-blocking)
+                    try:
+                        loop = asyncio.get_running_loop()
+                        loop.create_task(broadcast_update(log_data))
+                    except RuntimeError:
+                        pass
+                except ImportError:
+                    pass
+                    
             except Exception as e:
                 logger.error(f"Failed to add execution log: {e}")
         logger.info(f"[{level}] {message}")
 
-    def get_live_view_url(self) -> str:
+
+
+    def _extract_nova_act_logs_from_output(self, output_text: str):
+        """Extract and log Nova Act execution steps from output text"""
+        try:
+            lines = output_text.split('\n')
+            current_step = None
+            
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                
+                # Detect step markers
+                if line.startswith('295d>') or 'act(' in line:
+                    if 'act(' in line:
+                        # Extract the command being executed
+                        command_start = line.find('act("') + 5
+                        command_end = line.find('")') if line.find('")') > command_start else len(line)
+                        command = line[command_start:command_end] if command_start > 4 else line
+                        self._add_log("INFO", f"Executing Nova Act command: {command[:100]}...", "nova_act_execution")
+                        self._broadcast_nova_act_update("command_started", {"command": command[:200]})
+                    else:
+                        self._add_log("INFO", line, "nova_act_step")
+                
+                # Detect think() statements
+                elif 'think(' in line:
+                    think_start = line.find('think("') + 7
+                    think_end = line.rfind('");')
+                    if think_start > 6 and think_end > think_start:
+                        thought = line[think_start:think_end]
+                        self._add_log("INFO", f"Agent thinking: {thought}", "nova_act_reasoning")
+                        self._broadcast_nova_act_update("agent_thinking", {"thought": thought})
+                
+                # Detect actions
+                elif '>>' in line and ('agentType(' in line or 'agentClick(' in line or 'agentScroll(' in line):
+                    action = line.replace('>>', '').strip()
+                    self._add_log("INFO", f"Performing action: {action}", "nova_act_action")
+                    self._broadcast_nova_act_update("action_performed", {"action": action})
+                
+                # Detect errors
+                elif 'AgentError' in line or 'HumanValidationError' in line:
+                    self._add_log("ERROR", f"Nova Act error: {line}", "nova_act_error")
+                    self._broadcast_nova_act_update("error_occurred", {"error": line})
+                
+                # Detect completion messages
+                elif 'View your act run here:' in line:
+                    html_path = line.split('View your act run here: ')[-1].strip()
+                    self._add_log("INFO", f"Nova Act HTML report available: {html_path}", "nova_act_completion")
+                
+        except Exception as e:
+            logger.error(f"Failed to extract Nova Act logs: {e}")
+            self._add_log("WARNING", f"Failed to parse Nova Act output: {e}", "log_parsing")
+
+    def _broadcast_nova_act_update(self, update_type: str, data: dict):
+        """Broadcast Nova Act specific updates to frontend"""
+        try:
+            from app import broadcast_update
+            
+            update_data = {
+                "type": "nova_act_update",
+                "order_id": self.session_id,
+                "update_type": update_type,
+                "data": data,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+            
+            # Try to broadcast (non-blocking)
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(broadcast_update(update_data))
+            except RuntimeError:
+                # No event loop running, skip broadcast
+                pass
+        except ImportError:
+            # broadcast_update not available
+            pass
+        except Exception as e:
+            logger.error(f"Failed to broadcast Nova Act update: {e}")
+
+    async def resume_after_captcha(self, order) -> Dict[str, Any]:
+        """Resume Nova Act execution after CAPTCHA has been resolved manually"""
+        try:
+            if not hasattr(self, 'ws_url') or not self.ws_url or not self.api_key:
+                raise RuntimeError("Nova Act connection info not available")
+
+            self._add_log("INFO", "Resuming Nova Act execution after CAPTCHA resolution", "captcha_resume")
+            
+            # Check if we have site credentials for resume
+            credentials_info = ""
+            if self.retailer_config.get("credentials"):
+                creds = self.retailer_config["credentials"]
+                if creds.get("username") and creds.get("password"):
+                    credentials_info = f"""
+                    
+                    SITE LOGIN CREDENTIALS (use if login is required):
+                    - Username: {creds['username']}
+                    - Password: {creds['password']}
+                    
+                    If you encounter a login page during resume, use these credentials to sign in.
+                    """
+
+            # Create a simplified command to continue from where we left off
+            # Resume from current page after CAPTCHA resolution
+            command = f"""
+            Resume the e-commerce order for {order.product_name} from current page:
+            1. Continue with the current task (add to cart, checkout, or fill shipping)
+            2. If login is required, use the provided credentials to sign in
+            3. If not on product page, navigate to {order.product_url if hasattr(order, 'product_url') and order.product_url else 'search for ' + order.product_name}
+            4. Select size: {order.product_size or 'any available'} (if not already selected)
+            5. Select color: {order.product_color or 'any available'} (if not already selected)
+            6. Add to cart (if not already in cart)
+            7. Proceed to checkout
+            8. Fill shipping information: {order.shipping_address.get('first_name', '')} {order.shipping_address.get('last_name', '')}, {order.shipping_address.get('address_line_1', '')}, {order.shipping_address.get('city', '')}, {order.shipping_address.get('state', '')} {order.shipping_address.get('postal_code', '')}
+            {credentials_info}
+            """
+
+            self._add_log("INFO", f"Generated resume command: {len(command)} characters", "captcha_resume")
+            self._broadcast_nova_act_update("resume_started", {"message": "Resuming after CAPTCHA resolution"})
+
+            # Execute the resume command using the same browser session
+            def execute_nova_act_resume():
+                try:
+                    self._add_log("INFO", "Creating Nova Act resume session", "captcha_resume")
+                    
+                    # Set up event loop for this thread
+                    import asyncio
+                    try:
+                        asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                    except Exception as loop_error:
+                        self._add_log("WARNING", f"Event loop setup warning: {loop_error}", "captcha_resume")
+                    
+                    # Capture stdout to parse Nova Act logs
+                    import sys
+                    from io import StringIO
+                    
+                    old_stdout = sys.stdout
+                    captured_output = StringIO()
+                    
+                    try:
+                        # Redirect stdout to capture Nova Act logs
+                        sys.stdout = captured_output
+                        
+                        # Create and use Nova Act with existing session
+                        with NovaAct(
+                            cdp_endpoint_url=self.ws_url,
+                            cdp_headers=self.headers,
+                            preview={"playwright_actuation": True},
+                            nova_act_api_key=self.api_key,
+                            # Don't specify starting_page to continue from current page
+                        ) as nova_act:
+                            self._add_log("INFO", "Nova Act resume session created, executing command", "captcha_resume")
+                            result = nova_act.act(command)
+                            return result, captured_output.getvalue()
+                    finally:
+                        # Restore stdout
+                        sys.stdout = old_stdout
+                        
+                except Exception as e:
+                    self._add_log("ERROR", f"Nova Act resume execution error: {e}", "captcha_resume")
+                    return f"FAILED: Nova Act resume execution error: {e}", captured_output.getvalue() if 'captured_output' in locals() else ""
+            
+            # Run Nova Act resume in thread pool
+            import concurrent.futures
+            loop = asyncio.get_event_loop()
+            
+            try:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    future = loop.run_in_executor(executor, execute_nova_act_resume)
+                    result_tuple = await asyncio.wait_for(future, timeout=300.0)  # 5 minute timeout
+                    
+                    if isinstance(result_tuple, tuple):
+                        result, captured_logs = result_tuple
+                        # Extract and log Nova Act execution steps
+                        if captured_logs:
+                            self._extract_nova_act_logs_from_output(captured_logs)
+                    else:
+                        result = result_tuple
+                    
+            except asyncio.TimeoutError:
+                self._add_log("ERROR", "Nova Act resume execution timed out after 5 minutes", "captcha_resume")
+                result = "FAILED: Nova Act resume automation timed out after 5 minutes."
+                
+            except Exception as exec_error:
+                self._add_log("ERROR", f"Resume thread execution failed: {exec_error}", "captcha_resume")
+                result = f"FAILED: Resume thread execution error: {exec_error}"
+
+            self._add_log("INFO", f"Resume automation completed with result: {str(result)[:200]}...", "captcha_resume")
+
+            # Check result
+            if result and "completed" in str(result).lower():
+                self._broadcast_nova_act_update("resume_completed", {"result": "Order completed successfully"})
+                return {
+                    "success": True,
+                    "status": "completed",
+                    "confirmation_number": f"NOVA-{self.session_id[:8]}",
+                    "automation_method": "nova_act",
+                    "result": str(result),
+                }
+
+            elif result and "captcha" in str(result).lower():
+                self._broadcast_nova_act_update("captcha_detected_again", {"message": "Another CAPTCHA detected"})
+                return {
+                    "success": False,
+                    "status": "requires_human",
+                    "message": "Another CAPTCHA detected during resume",
+                    "automation_method": "nova_act",
+                }
+
+            else:
+                self._broadcast_nova_act_update("resume_failed", {"error": str(result)})
+                return {
+                    "success": False,
+                    "status": "failed",
+                    "error": str(result),
+                    "automation_method": "nova_act",
+                }
+
+        except Exception as e:
+            self._add_log("ERROR", f"Failed to resume Nova Act after CAPTCHA: {e}", "captcha_resume")
+            self._broadcast_nova_act_update("resume_error", {"error": str(e)})
+            return {
+                "success": False,
+                "status": "failed",
+                "error": str(e),
+                "automation_method": "nova_act",
+            }
+
+    def get_live_view_url(self, expires: int = 300) -> dict:
         """Get live view URL for real-time browser session viewing"""
         try:
             if not self.agentcore_client:
-                return None
+                self._add_log("ERROR", "No AgentCore client available for live view", "live_view")
+                return {
+                    "url": None,
+                    "error": "AgentCore session not active",
+                    "session_id": getattr(self, 'session_id', None),
+                    "type": "dcv"
+                }
+
+            # Check if AgentCore client has the method
+            if not hasattr(self.agentcore_client, 'generate_live_view_url'):
+                self._add_log("ERROR", "AgentCore client does not support live view", "live_view")
+                return {
+                    "url": None,
+                    "error": "Live view not supported by AgentCore client",
+                    "session_id": getattr(self, 'session_id', None),
+                    "type": "dcv"
+                }
 
             # Generate live view URL using AgentCore
-            live_view_url = self.agentcore_client.generate_live_view_url()
+            live_view_url = self.agentcore_client.generate_live_view_url(expires=expires)
 
-            self._add_log(
-                "INFO", f"Generated live view URL: {live_view_url[:50]}...", "live_view"
-            )
-
-            return live_view_url
+            if live_view_url:
+                self._add_log("INFO", f"Generated live view URL: {live_view_url[:50]}...", "live_view")
+                return {
+                    "url": live_view_url,
+                    "session_id": getattr(self, 'session_id', None),
+                    "type": "dcv",
+                    "expires": expires,
+                    "headers": getattr(self.agentcore_client, 'headers', None)
+                }
+            else:
+                return {
+                    "url": None,
+                    "error": "Failed to generate live view URL",
+                    "session_id": getattr(self, 'session_id', None),
+                    "type": "dcv"
+                }
 
         except Exception as e:
             logger.error(f"Failed to generate live view URL: {e}")
             self._add_log("ERROR", f"Live view URL generation failed: {e}", "live_view")
-            return None
+            return {
+                "url": None,
+                "error": f"Live view generation failed: {str(e)}",
+                "session_id": getattr(self, 'session_id', None),
+                "type": "dcv"
+            }
 
     async def _capture_screenshot(self, step_name: str = None) -> str:
         """Capture screenshot and return URL - Disabled to avoid concurrent connection issues"""
@@ -100,81 +412,173 @@ class NovaActAgent:
         """Start Nova Act + AgentCore Browser session"""
         try:
             self.session_id = session_id
+            self.worker_session_id = session_id
+
+            self._add_log("INFO", f"Starting Nova Act session: {session_id}", "initialization")
 
             # Set up session replay configuration
             self.session_replay_config = {
                 "enabled": True,
-                "s3_bucket": self.config.get("session_replay_s3_bucket", "sanghwa-oregon"),
-                "s3_prefix": self.config.get("session_replay_s3_prefix", f"session-replays/{session_id}/"),
+                "s3_bucket": self.agent_config.session_replay_s3_bucket,
+                "s3_prefix": f"{self.agent_config.session_replay_s3_prefix}{session_id}/",
                 "session_id": session_id
             }
 
             if browser_session_id:
                 # Use existing browser session
-                from agentcore_manager import agentcore_manager
+                try:
+                    from agentcore_manager import agentcore_manager
+                    cdp_info = await agentcore_manager.get_cdp_info(browser_session_id)
 
-                cdp_info = await agentcore_manager.get_cdp_info(browser_session_id)
+                    if not cdp_info:
+                        raise RuntimeError(
+                            f"Browser session {browser_session_id} not found"
+                        )
 
-                if not cdp_info:
-                    raise RuntimeError(
-                        f"Browser session {browser_session_id} not found"
+                    ws_url = cdp_info["cdp_endpoint"]
+                    headers = cdp_info["headers"]
+
+                    self._add_log("INFO", f"Using existing browser session: {browser_session_id}", "browser_setup")
+                except ImportError:
+                    self._add_log("WARNING", "agentcore_manager not available, creating new session", "browser_setup")
+                    browser_session_id = None
+
+            if not browser_session_id:
+                # Create new AgentCore browser session
+                region = self.agent_config.agentcore_region
+
+                try:
+                    # Create control plane client
+                    control_plane_url = get_control_plane_endpoint(region)
+                    control_client = boto3.client(
+                        "bedrock-agentcore-control",
+                        region_name=region,
+                        endpoint_url=control_plane_url
                     )
 
-                ws_url = cdp_info["cdp_endpoint"]
-                headers = cdp_info["headers"]
+                    # Create browser with recording
+                    browser_name = f"nova_act_browser_{session_id[:8]}"
+                    s3_bucket = self.agent_config.session_replay_s3_bucket
+                    s3_prefix = f"{self.agent_config.session_replay_s3_prefix}{session_id}/"
+                    recording_role_arn = self.agent_config.execution_role_arn
 
-                logger.info(f"Using existing browser session: {browser_session_id}")
-            else:
-                # Create new AgentCore browser session
-                region = self.config.get("agentcore_region", "us-west-2")
+                    if recording_role_arn:
+                        response = control_client.create_browser(
+                            name=browser_name,
+                            executionRoleArn=recording_role_arn,
+                            networkConfiguration={"networkMode": "PUBLIC"},
+                            recording={
+                                "enabled": True,
+                                "s3Location": {"bucket": s3_bucket, "prefix": s3_prefix}
+                            }
+                        )
+                    else:
+                        response = control_client.create_browser(
+                            name=browser_name,
+                            networkConfiguration={"networkMode": "PUBLIC"}
+                        )
 
-                # Use context manager properly
-                self.agentcore_context = browser_session(region)
-                self.agentcore_client = self.agentcore_context.__enter__()
+                    browser_id = response["browserId"]
+                    self._add_log("INFO", f"Created AgentCore browser: {browser_id}", "browser_setup")
 
-                # Get CDP endpoint
-                ws_url, headers = self.agentcore_client.generate_ws_headers()
+                    # Create browser client and start session
+                    browser_client = BrowserClient(region=region)
+                    browser_client.identifier = browser_id
+                    
+                    agentcore_session_id = browser_client.start(
+                        identifier=browser_id,
+                        name=f"nova_act_session_{session_id[:8]}",
+                        session_timeout_seconds=7200  # 2 hours for CAPTCHA handling
+                    )
+                    
+                    # Get WebSocket headers
+                    ws_url, headers = browser_client.generate_ws_headers()
+                    
+                    self.agentcore_client = browser_client
+                    self._add_log("INFO", f"Started AgentCore session: {agentcore_session_id}", "browser_setup")
+                    self._add_log("INFO", f"WebSocket URL: {ws_url[:50]}...", "browser_setup")
+                    
+                    # Wait for browser to be ready
+                    await asyncio.sleep(10)
+                    
+                except Exception as e:
+                    self._add_log("ERROR", f"Failed to create AgentCore browser: {e}", "browser_setup")
+                    raise e
 
-            # Store CDP info for Nova Act initialization
+            # Store CDP info
             self.ws_url = ws_url
             self.headers = headers
             
-            # Register browser session with AgentCore Manager for Live View sharing
+            # Register browser session with BrowserService for Live View
             try:
-                from agentcore_manager import get_agentcore_manager
-                # Get database manager if available
-                db_manager = getattr(self, 'db_manager', None)
-                agentcore_manager = get_agentcore_manager(db_manager)
+                from services.browser_service import get_browser_service
+                browser_service = get_browser_service()
                 
-                agentcore_manager.register_session(
-                    session_id=session_id,
-                    agentcore_client=self.agentcore_client,
-                    order_id=None,  # Will be set when processing an order
-                    metadata={
-                        'automation_method': 'nova_act',
-                        'ws_url': ws_url,
-                        'created_at': datetime.now().isoformat()
-                    }
-                )
-                logger.info(f"Registered browser session {session_id} with AgentCore Manager")
+                if browser_service:
+                    browser_service.register_session(
+                        session_id=session_id,
+                        browser_client=self.agentcore_client,
+                        order_id=session_id,
+                        metadata={
+                            'automation_method': 'nova_act',
+                            'ws_url': ws_url,
+                            'created_at': datetime.now().isoformat()
+                        }
+                    )
+                    self._add_log("INFO", f"Registered browser session with BrowserService", "browser_setup")
             except Exception as e:
-                logger.warning(f"Failed to register browser session with AgentCore Manager: {e}")
+                self._add_log("WARNING", f"Failed to register browser session: {e}", "browser_setup")
 
             # Initialize Nova Act with AgentCore
-            self.nova_session = NovaAct(
-                cdp_endpoint_url=ws_url,
-                cdp_headers=headers,
-                preview={"playwright_actuation": True},
-                nova_act_api_key=self.api_key,
-                starting_page="https://www.google.com",
-            )
+            if self.agentcore_client and ws_url:
+                self._add_log("INFO", f"Initializing Nova Act with WebSocket: {ws_url[:50]}...", "nova_act_setup")
+                
+                # Validate WebSocket URL format
+                if not ws_url.startswith('wss://'):
+                    error_msg = f"Invalid WebSocket URL format: {ws_url}"
+                    self._add_log("ERROR", error_msg, "nova_act_setup")
+                    raise RuntimeError("Invalid WebSocket URL format")
+                
+                # Validate API key
+                if not self.api_key:
+                    error_msg = "No Nova Act API key available"
+                    self._add_log("ERROR", error_msg, "nova_act_setup")
+                    raise RuntimeError("Nova Act API key required")
+                
+                try:
+                    # Store connection info for later use in execution thread
+                    self._add_log("INFO", f"Using API key: {self.api_key[:10]}...", "nova_act_setup")
+                    self._add_log("INFO", "Nova Act connection info stored for execution thread", "nova_act_setup")
+                    
+                    # Don't initialize Nova Act here - do it in the execution thread to avoid thread conflicts
+                    # Just validate that we have the required connection info
+                    if not ws_url or not headers or not self.api_key:
+                        raise RuntimeError("Missing required Nova Act connection parameters")
+                    
+                    # Set nova_session to None - we'll create it fresh in each execution thread
+                    self.nova_session = None
+                    
+                    logger.info("Nova Act connection validated, ready for execution")
+                    self._add_log("INFO", "Nova Act connection validated, ready for execution", "nova_act_setup")
+                    
+                except Exception as nova_error:
+                    logger.error(f"Nova Act initialization failed: {nova_error}")
+                    self._add_log("ERROR", f"Nova Act initialization failed: {nova_error}", "nova_act_setup")
+                    
+                    # Don't fail the session creation, just log the error
+                    # The session can still be used for other purposes
+                    self.nova_session = None
+                    self._add_log("WARNING", "Continuing without Nova Act - session available for other tools", "nova_act_setup")
+                    
+            else:
+                error_msg = f"Missing requirements - AgentCore client: {bool(self.agentcore_client)}, WebSocket URL: {bool(ws_url)}"
+                self._add_log("ERROR", error_msg, "nova_act_setup")
+                raise RuntimeError("Failed to create AgentCore browser session - missing client or WebSocket URL")
 
             # Also create a Strands agent for hybrid approach
             try:
                 bedrock_model = BedrockModel(
-                    model_id=self.config.get(
-                        "model", "us.anthropic.claude-3-7-sonnet-20250219-v1:0"
-                    ),
+                    model_id=self.agent_config.default_model,
                     cache_prompt="default"
                 )
                 
@@ -190,7 +594,7 @@ class NovaActAgent:
                 logger.warning(f"Could not create Strands agent: {strands_error}")
                 self.strands_agent = None
 
-            logger.info(f"Nova Act + AgentCore Browser session {session_id} started")
+            self._add_log("INFO", f"Nova Act session ready for processing", "initialization")
 
             return {
                 "session_id": session_id,
@@ -198,17 +602,23 @@ class NovaActAgent:
                 "automation_method": "nova_act",
                 "created_at": datetime.now().isoformat(),
                 "browser_session_id": browser_session_id,
+                "agentcore_session_id": getattr(self.agentcore_client, 'session_id', None),
+                "ws_url": ws_url
             }
 
         except Exception as e:
-            logger.error(f"Failed to start Nova Act session: {e}")
-            raise
+            self._add_log("ERROR", f"Failed to start Nova Act session: {e}", "initialization")
+            return {
+                "session_id": session_id,
+                "status": "failed",
+                "automation_method": "nova_act",
+                "created_at": datetime.now().isoformat(),
+                "browser_session_id": browser_session_id,
+                "error": str(e)
+            }
 
     async def process_order(self, order, progress_callback=None) -> Dict[str, Any]:
-        """Process order using Nova Act"""
-        if not self.nova_session:
-            raise RuntimeError("Session not started")
-
+        """Process order using Nova Act with worker process"""
         try:
             order_id = order.id
             self._add_log(
@@ -216,218 +626,310 @@ class NovaActAgent:
                 f"Starting order processing for {order.product_name}",
                 "initialization",
             )
+
+            # Check if we have worker available for non-blocking processing
+            if self.worker and hasattr(self, 'ws_url') and self.ws_url:
+                return await self._process_order_with_worker(order, progress_callback)
+            elif hasattr(self, 'ws_url') and self.ws_url and self.api_key:
+                # Fallback to direct Nova Act processing
+                return await self._process_order_direct(order, progress_callback)
+            else:
+                raise RuntimeError("Nova Act not properly initialized - missing WebSocket URL or API key")
+
+        except Exception as e:
+            self._add_log("ERROR", f"Order processing failed: {e}", "processing")
+            return {
+                "success": False,
+                "status": "failed",
+                "error": str(e),
+                "automation_method": "nova_act",
+            }
+
+    async def _process_order_with_worker(self, order, progress_callback=None) -> Dict[str, Any]:
+        """Process order using Nova Act worker (non-blocking)"""
+        try:
+            order_id = order.id
+            self._add_log("INFO", f"Using Nova Act worker for order processing", "processing")
             
-            # Update AgentCore Manager with order_id for Live View sharing
-            try:
-                from agentcore_manager import get_agentcore_manager
-                db_manager = getattr(self, 'db_manager', None)
-                agentcore_manager = get_agentcore_manager(db_manager)
-                
-                if hasattr(self, 'session_id'):
-                    # Re-register with order_id (this will update the database)
-                    agentcore_manager.register_session(
-                        session_id=self.session_id,
-                        agentcore_client=self.agentcore_client,
-                        order_id=order_id,
-                        metadata={
-                            'automation_method': 'nova_act',
-                            'ws_url': getattr(self, 'ws_url', ''),
-                            'created_at': datetime.now().isoformat()
-                        }
-                    )
-                    logger.info(f"Updated AgentCore session {self.session_id} with order_id: {order_id}")
-            except Exception as e:
-                logger.warning(f"Failed to update AgentCore Manager with order_id: {e}")
-
-            # Set up session replay for this order if available
-            if hasattr(self, 'session_replay_config') and self.session_replay_config.get('enabled'):
-                try:
-                    # Import database manager here to avoid circular imports
-                    import sys
-                    import os
-                    sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-                    from database import DatabaseManager
-                    db_manager = DatabaseManager()
-                    
-                    # Update session replay info in database
-                    db_manager.update_session_replay_info(
-                        order_id=order_id,
-                        s3_bucket=self.session_replay_config['s3_bucket'],
-                        s3_prefix=self.session_replay_config['s3_prefix'],
-                        enabled=True,
-                        session_id=self.session_replay_config['session_id']
-                    )
-                    
-                    self._add_log(
-                        "INFO",
-                        f"Session replay configured for order {order_id}: {self.session_replay_config['s3_bucket']}/{self.session_replay_config['s3_prefix']}",
-                        "session_replay",
-                    )
-                except Exception as replay_error:
-                    self._add_log(
-                        "WARNING",
-                        f"Failed to set up session replay for order {order_id}: {replay_error}",
-                        "session_replay",
-                    )
-
-            # Create order command
-            command = f"""
-            Complete this e-commerce order:
-            1. Navigate to {order.product_url}
-            2. Find product: {order.product_name}
-            3. Select size: {order.product_size or 'any available'}
-            4. Select color: {order.product_color or 'any available'}
-            5. Add to cart
-            6. Proceed to checkout
-            7. Fill shipping: {order.shipping_address.get('first_name', '')} {order.shipping_address.get('last_name', '')}, {order.shipping_address.get('address_line_1', '')}, {order.shipping_address.get('city', '')}, {order.shipping_address.get('state', '')} {order.shipping_address.get('postal_code', '')}
+            # Prepare configuration for worker process
+            worker_config = {
+                'ws_url': self.ws_url,
+                'headers': getattr(self, 'headers', {}),
+                'api_key': self.api_key,
+                'order_data': {
+                    'product_name': order.product_name,
+                    'product_url': order.product_url,
+                    'product_size': order.product_size,
+                    'product_color': order.product_color,
+                    'shipping_address': order.shipping_address
+                }
+            }
             
-            Stop if you encounter CAPTCHAs or errors.
-            """
-
-            self._add_log(
-                "INFO",
-                f"Generated automation command: {len(command)} characters",
-                "command_generation",
-            )
+            self._add_log("INFO", f"Using API key: {self.api_key[:10]}..." if self.api_key else "No API key found", "processing")
 
             if progress_callback:
-                await progress_callback(
-                    {
-                        "order_id": order_id,
-                        "status": "processing",
-                        "progress": 10,
-                        "step": "Starting Nova Act client",
-                        "automation_method": "nova_act",
-                    }
-                )
+                await progress_callback({
+                    "order_id": order_id,
+                    "status": "processing",
+                    "progress": 10,
+                    "step": "Starting Nova Act worker process",
+                    "automation_method": "nova_act",
+                })
 
-            # Start Nova Act client
-            self._add_log("INFO", "Starting Nova Act client", "client_startup")
-
-            # Initialize Nova Act in thread pool to avoid event loop conflicts
-            import concurrent.futures
+            # Start worker session (non-blocking)
+            worker_result = await self.worker.start_session(order_id, worker_config)
             
-            def init_nova_act():
-                try:
-                    # Set up event loop for this thread to avoid uvloop conflicts
-                    try:
-                        asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
-                        loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(loop)
-                    except Exception as loop_error:
-                        self._add_log("WARNING", f"Event loop setup warning: {loop_error}", "client_startup")
-                    
-                    # Initialize Nova Act
-                    nova_session = NovaAct(
-                        cdp_endpoint_url=self.ws_url,
-                        cdp_headers=self.headers,
-                        preview={"playwright_actuation": True},
-                        nova_act_api_key=self.api_key,
-                        starting_page="https://www.google.com",
-                    )
-                    
-                    # Start Nova Act session
-                    nova_session.start()
-                    return nova_session
-                    
-                except Exception as e:
-                    self._add_log("ERROR", f"Nova Act initialization failed: {e}", "client_startup")
-                    raise e
-            
-            # Run Nova Act initialization in thread pool
-            loop = asyncio.get_event_loop()
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                self.nova_session = await loop.run_in_executor(executor, init_nova_act)
+            if worker_result.get("status") == "failed":
+                raise Exception(f"Worker failed to start: {worker_result.get('error')}")
 
-            self._add_log(
-                "INFO", "Nova Act client started successfully", "client_startup"
-            )
+            self._add_log("INFO", "Nova Act worker process started", "processing")
 
             if progress_callback:
-                await progress_callback(
-                    {
-                        "order_id": order_id,
-                        "status": "processing",
-                        "progress": 20,
-                        "step": "Executing Nova Act automation",
-                        "automation_method": "nova_act",
-                    }
-                )
+                await progress_callback({
+                    "order_id": order_id,
+                    "status": "processing",
+                    "progress": 30,
+                    "step": "Nova Act automation in progress",
+                    "automation_method": "nova_act",
+                })
 
-            # Capture initial screenshot
-            initial_screenshot = await self._capture_screenshot("initial_state")
+            # Poll for completion (non-blocking)
+            max_wait_time = 300  # 5 minutes
+            poll_interval = 5    # 5 seconds
+            elapsed_time = 0
 
-            # Execute automation
-            self._add_log(
-                "INFO",
-                f"Executing automation command: {command[:100]}...",
-                "automation_execution",
-            )
+            while elapsed_time < max_wait_time:
+                await asyncio.sleep(poll_interval)
+                elapsed_time += poll_interval
 
-            # Run Nova Act automation in thread pool to avoid blocking
-            def execute_nova_act():
-                try:
-                    return self.nova_session.act(command)
-                except Exception as e:
-                    self._add_log("ERROR", f"Nova Act execution error: {e}", "automation_execution")
-                    return f"FAILED: Nova Act execution error: {e}"
-            
-            # Execute in thread pool with timeout
-            import concurrent.futures
-            loop = asyncio.get_event_loop()
-            
-            try:
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                    future = loop.run_in_executor(executor, execute_nova_act)
-                    result = await asyncio.wait_for(future, timeout=300.0)  # 5 minute timeout
-                    
-            except asyncio.TimeoutError:
-                self._add_log(
-                    "ERROR",
-                    "Nova Act execution timed out after 5 minutes",
-                    "automation_execution",
-                )
-                result = "FAILED: Nova Act automation timed out after 5 minutes."
+                # Check worker status
+                status = await self.worker.get_session_status(order_id)
                 
-            except Exception as exec_error:
-                self._add_log(
-                    "ERROR",
-                    f"Thread execution failed: {exec_error}",
-                    "automation_execution",
-                )
-                result = f"FAILED: Thread execution error: {exec_error}"
-
-            self._add_log(
-                "INFO",
-                f"Automation completed with result: {str(result)[:200]}...",
-                "automation_execution",
-            )
-
-            # Capture final screenshot
-            final_screenshot = await self._capture_screenshot("final_state")
-
-            # Check result
-            if result and "completed" in str(result).lower():
-                if progress_callback:
-                    await progress_callback(
-                        {
+                if status.get("status") == "completed":
+                    self._add_log("INFO", "Nova Act automation completed successfully", "processing")
+                    
+                    if progress_callback:
+                        await progress_callback({
                             "order_id": order_id,
                             "status": "completed",
                             "progress": 100,
                             "step": "Order completed successfully",
                             "automation_method": "nova_act",
-                        }
-                    )
+                        })
 
-                # Prepare session replay info for return
-                session_replay_info = {}
-                if hasattr(self, 'session_replay_config') and self.session_replay_config.get('enabled'):
-                    session_replay_info = {
-                        "session_replay_enabled": True,
-                        "session_replay_s3_bucket": self.session_replay_config['s3_bucket'],
-                        "session_replay_s3_prefix": self.session_replay_config['s3_prefix'],
-                        "session_id": self.session_replay_config['session_id']
+                    return {
+                        "success": True,
+                        "status": "completed",
+                        "confirmation_number": status.get("confirmation_number", f"NOVA-{order_id[:8]}"),
+                        "automation_method": "nova_act",
+                        "result": status.get("result", "Order completed")
                     }
+                
+                elif status.get("status") == "failed":
+                    error_msg = status.get("error", "Unknown error")
+                    self._add_log("ERROR", f"Nova Act automation failed: {error_msg}", "processing")
+                    
+                    return {
+                        "success": False,
+                        "status": "failed",
+                        "error": error_msg,
+                        "automation_method": "nova_act",
+                    }
+                
+                elif status.get("status") == "requires_human":
+                    self._add_log("WARNING", "Nova Act detected CAPTCHA or requires human intervention", "processing")
+                    
+                    return {
+                        "success": False,
+                        "status": "requires_human",
+                        "message": "CAPTCHA detected or human intervention required",
+                        "automation_method": "nova_act",
+                    }
+                
+                # Update progress
+                progress = min(30 + (elapsed_time / max_wait_time) * 60, 90)
+                if progress_callback:
+                    await progress_callback({
+                        "order_id": order_id,
+                        "status": "processing",
+                        "progress": int(progress),
+                        "step": f"Nova Act automation in progress ({elapsed_time}s)",
+                        "automation_method": "nova_act",
+                    })
+
+            # Timeout
+            self._add_log("ERROR", "Nova Act automation timed out", "processing")
+            return {
+                "success": False,
+                "status": "failed",
+                "error": "Automation timed out",
+                "automation_method": "nova_act",
+            }
+
+        except Exception as e:
+            self._add_log("ERROR", f"Nova Act worker processing failed: {e}", "processing")
+            return {
+                "success": False,
+                "status": "failed",
+                "error": str(e),
+                "automation_method": "nova_act",
+            }
+
+    async def _process_order_direct(self, order, progress_callback=None) -> Dict[str, Any]:
+        """Process order using direct Nova Act (fallback method)"""
+        if not hasattr(self, 'ws_url') or not self.ws_url or not self.api_key:
+            raise RuntimeError("Nova Act connection info not available")
+
+        try:
+            order_id = order.id
+            self._add_log("INFO", f"Using direct Nova Act processing (fallback)", "processing")
+
+            # Check if we have site credentials
+            credentials_info = ""
+            if self.retailer_config.get("credentials"):
+                creds = self.retailer_config["credentials"]
+                if creds.get("username") and creds.get("password"):
+                    credentials_info = f"""
+                    
+                    SITE LOGIN CREDENTIALS (use if login is required):
+                    - Username: {creds['username']}
+                    - Password: {creds['password']}
+                    
+                    If you encounter a login page, use these credentials to sign in before proceeding with the order.
+                    """
+                    self._add_log("INFO", f"Site credentials available for {creds.get('site_name', 'site')}", "credentials")
+
+            # Create order command - optimize based on whether we have product URL
+            if hasattr(order, 'product_url') and order.product_url:
+                # We're starting directly on the product page, so skip navigation
+                command = f"""
+                Complete this e-commerce order for {order.product_name}:
+                1. Verify this is the correct product page
+                2. If login is required, use the provided credentials to sign in
+                3. Select size: {order.product_size or 'any available'}
+                4. Select color: {order.product_color or 'any available'}
+                5. Add to cart
+                6. Proceed to checkout
+                7. Fill shipping information: {order.shipping_address.get('first_name', '')} {order.shipping_address.get('last_name', '')}, {order.shipping_address.get('address_line_1', '')}, {order.shipping_address.get('city', '')}, {order.shipping_address.get('state', '')} {order.shipping_address.get('postal_code', '')}
+                {credentials_info}
+                """
+            else:
+                # If no product URL, search for the product on the retailer site
+                command = f"""
+                Complete this e-commerce order:
+                1. If login is required, use the provided credentials to sign in
+                2. Search for product: {order.product_name}
+                3. Select the correct product from search results
+                4. Select size: {order.product_size or 'any available'}
+                5. Select color: {order.product_color or 'any available'}
+                6. Add to cart
+                7. Proceed to checkout
+                8. Fill shipping information: {order.shipping_address.get('first_name', '')} {order.shipping_address.get('last_name', '')}, {order.shipping_address.get('address_line_1', '')}, {order.shipping_address.get('city', '')}, {order.shipping_address.get('state', '')} {order.shipping_address.get('postal_code', '')}
+                {credentials_info}
+                """
+
+            self._add_log("INFO", f"Generated automation command: {len(command)} characters", "command_generation")
+
+            if progress_callback:
+                await progress_callback({
+                    "order_id": order_id,
+                    "status": "processing",
+                    "progress": 20,
+                    "step": "Executing Nova Act automation",
+                    "automation_method": "nova_act",
+                })
+
+            # Execute automation in the same thread where Nova Act was initialized
+            def execute_nova_act_same_thread():
+                try:
+                    # Create a new Nova Act session in the same thread context
+                    # This avoids the "cannot switch to a different thread" error
+                    self._add_log("INFO", "Creating Nova Act session in execution thread", "automation_execution")
+                    
+                    # Set up event loop for this thread
+                    import asyncio
+                    try:
+                        asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                    except Exception as loop_error:
+                        self._add_log("WARNING", f"Event loop setup warning: {loop_error}", "automation_execution")
+                    
+                    # Capture stdout to parse Nova Act logs
+                    import sys
+                    from io import StringIO
+                    
+                    old_stdout = sys.stdout
+                    captured_output = StringIO()
+                    
+                    try:
+                        # Redirect stdout to capture Nova Act logs
+                        sys.stdout = captured_output
+                        
+                        # Determine starting URL - prefer product URL, then retailer starting URL, then fallback
+                        if hasattr(order, 'product_url') and order.product_url:
+                            starting_url = order.product_url
+                            self._add_log("INFO", f"Using product URL as starting page: {starting_url}", "automation_execution")
+                        else:
+                            starting_url = self.retailer_config.get('starting_url', 'https://www.google.com')
+                            self._add_log("INFO", f"Using retailer starting URL: {starting_url}", "automation_execution")
+                        
+                        # Create and use Nova Act in the same thread
+                        with NovaAct(
+                            cdp_endpoint_url=self.ws_url,
+                            cdp_headers=self.headers,
+                            preview={"playwright_actuation": True},
+                            nova_act_api_key=self.api_key,
+                            starting_page=starting_url,
+                        ) as nova_act:
+                            self._add_log("INFO", "Nova Act session created, executing command", "automation_execution")
+                            result = nova_act.act(command)
+                            return result, captured_output.getvalue()
+                    finally:
+                        # Restore stdout
+                        sys.stdout = old_stdout
+                        
+                except Exception as e:
+                    self._add_log("ERROR", f"Nova Act execution error: {e}", "automation_execution")
+                    return f"FAILED: Nova Act execution error: {e}", captured_output.getvalue() if 'captured_output' in locals() else ""
+            
+            # Run Nova Act in thread pool to avoid blocking and thread conflicts
+            import concurrent.futures
+            loop = asyncio.get_event_loop()
+            
+            try:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    future = loop.run_in_executor(executor, execute_nova_act_same_thread)
+                    result_tuple = await asyncio.wait_for(future, timeout=300.0)  # 5 minute timeout
+                    
+                    if isinstance(result_tuple, tuple):
+                        result, captured_logs = result_tuple
+                        # Extract and log Nova Act execution steps
+                        if captured_logs:
+                            self._extract_nova_act_logs_from_output(captured_logs)
+                    else:
+                        result = result_tuple
+                    
+            except asyncio.TimeoutError:
+                self._add_log("ERROR", "Nova Act execution timed out after 5 minutes", "automation_execution")
+                result = "FAILED: Nova Act automation timed out after 5 minutes."
+                
+            except Exception as exec_error:
+                self._add_log("ERROR", f"Thread execution failed: {exec_error}", "automation_execution")
+                result = f"FAILED: Thread execution error: {exec_error}"
+
+            self._add_log("INFO", f"Automation completed with result: {str(result)[:200]}...", "automation_execution")
+
+            # Check result
+            if result and "completed" in str(result).lower():
+                if progress_callback:
+                    await progress_callback({
+                        "order_id": order_id,
+                        "status": "completed",
+                        "progress": 100,
+                        "step": "Order completed successfully",
+                        "automation_method": "nova_act",
+                    })
 
                 return {
                     "success": True,
@@ -435,7 +937,6 @@ class NovaActAgent:
                     "confirmation_number": f"NOVA-{order_id[:8]}",
                     "automation_method": "nova_act",
                     "result": str(result),
-                    **session_replay_info
                 }
 
             elif result and "captcha" in str(result).lower():
@@ -450,7 +951,7 @@ class NovaActAgent:
                 raise Exception(f"Order processing failed: {result}")
 
         except Exception as e:
-            logger.error(f"Nova Act automation failed: {e}")
+            self._add_log("ERROR", f"Nova Act direct processing failed: {e}", "processing")
             return {
                 "success": False,
                 "status": "failed",
@@ -458,33 +959,24 @@ class NovaActAgent:
                 "automation_method": "nova_act",
             }
 
-    async def cleanup(self):
+    async def cleanup(self, force: bool = False):
         """Clean up resources"""
         try:
+            # Clean up worker session if available
+            if self.worker and self.worker_session_id:
+                try:
+                    await self.worker.stop_session(self.worker_session_id)
+                    self._add_log("INFO", "Nova Act worker session stopped", "cleanup")
+                except Exception as e:
+                    logger.warning(f"Failed to stop worker session: {e}")
+
             # Clean up Strands agent
             self.strands_agent = None
             
-            # Clean up Nova Act in thread pool to avoid blocking
-            if self.nova_session:
-                def cleanup_nova_act():
-                    try:
-                        if hasattr(self.nova_session, 'stop'):
-                            self.nova_session.stop()
-                        if hasattr(self.nova_session, "__exit__"):
-                            self.nova_session.__exit__(None, None, None)
-                        return True
-                    except Exception as e:
-                        logger.warning(f"Error stopping Nova Act client: {e}")
-                        return False
-                
-                # Run cleanup in thread pool
-                import concurrent.futures
-                loop = asyncio.get_event_loop()
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    await loop.run_in_executor(executor, cleanup_nova_act)
-                
+            # Clean up Nova Act resources
+            if hasattr(self, 'nova_session'):
                 self.nova_session = None
-                logger.info("Nova Act client stopped")
+                logger.info("Nova Act session reference cleared")
 
             # Clean up AgentCore context
             if hasattr(self, "agentcore_context") and self.agentcore_context:
@@ -496,37 +988,8 @@ class NovaActAgent:
                     self.agentcore_context = None
                     self.agentcore_client = None
 
-            logger.info(f"Nova Act session {self.session_id} cleaned up")
+            self._add_log("INFO", f"Nova Act session {self.session_id} cleaned up", "cleanup")
 
         except Exception as e:
             logger.error(f"Cleanup error: {e}")
 
-    def get_live_view_url(self, expires: int = 300) -> str:
-        """Get live view URL for AWS DCV - delegated to LiveViewService"""
-        try:
-            from ..services.live_view_service import get_live_view_service
-            
-            # Get or create live view service
-            live_view_service = get_live_view_service(self.config, self.db_manager)
-            
-            # Get session for this order (from database)
-            if self.db_manager and hasattr(self, 'session_id') and self.session_id:
-                order = self.db_manager.get_order(self.session_id)
-                if order:
-                    # Try to get existing session or create new one
-                    live_session_id = live_view_service.get_session_for_order(order.id)
-                    if not live_session_id:
-                        live_session_id = live_view_service.create_live_session(
-                            order.id, 
-                            "nova_act"
-                        )
-                    
-                    if live_session_id:
-                        presigned_url = live_view_service.get_presigned_url(live_session_id, expires=expires)
-                        if presigned_url:
-                            return presigned_url
-            
-            raise RuntimeError("Could not get live view URL - no valid session")
-            
-        except Exception as e:
-            raise RuntimeError(f"Live view URL generation failed: {e}")

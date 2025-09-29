@@ -15,15 +15,15 @@ resource "null_resource" "docker_build_push" {
       aws ecr get-login-password --region ${data.aws_region.current.name} | docker login --username AWS --password-stdin ${data.aws_caller_identity.current.account_id}.dkr.ecr.${data.aws_region.current.name}.amazonaws.com
       
       # Build and tag image
-      docker build -t ${aws_ecr_repository.timecard_processor.repository_url}:latest ../
+      docker build -t ${aws_ecr_repository.order_automation.repository_url}:latest ../
       
       # Push image
-      docker push ${aws_ecr_repository.timecard_processor.repository_url}:latest
+      docker push ${aws_ecr_repository.order_automation.repository_url}:latest
     EOT
     working_dir = path.module
   }
 
-  depends_on = [aws_ecr_repository.timecard_processor]
+  depends_on = [aws_ecr_repository.order_automation]
 }
 
 # Build React app locally and upload to S3

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { wsService } from '../services/api';
 import {
   Header,
   SpaceBetween,
@@ -33,6 +34,9 @@ const OrderDetails = ({ addNotification }) => {
   // Removed showLiveBrowser - live view is now embedded
   const [showSessionReplay, setShowSessionReplay] = useState(false);
   const [autoShowLiveView, setAutoShowLiveView] = useState(false);
+  const [manualControlEnabled, setManualControlEnabled] = useState(false);
+  const [controlLoading, setControlLoading] = useState(false);
+  const [novaActUpdates, setNovaActUpdates] = useState([]);
   const intervalRef = useRef(null);
   const logsContainerRef = useRef(null);
 
@@ -81,7 +85,7 @@ const OrderDetails = ({ addNotification }) => {
     }
     intervalRef.current = setInterval(() => {
       fetchOrder();
-    }, 10000); // 10초마다
+    }, 30000); // 30초마다 (reduced since we have WebSocket updates)
   }, [fetchOrder]);
 
   // Stop polling function
@@ -94,8 +98,45 @@ const OrderDetails = ({ addNotification }) => {
 
   useEffect(() => {
     fetchOrder();
-    return () => stopPolling();
-  }, [fetchOrder, stopPolling]);
+    
+    // Set up WebSocket listeners for real-time updates
+    const unsubscribeLog = wsService.subscribe('log_update', (data) => {
+      if (data.order_id === orderId) {
+        // Trigger a refresh to get the latest logs
+        fetchOrder();
+      }
+    });
+
+    const unsubscribeNovaAct = wsService.subscribe('nova_act_update', (data) => {
+      if (data.order_id === orderId) {
+        setNovaActUpdates(prev => [...prev, {
+          ...data,
+          id: Date.now() + Math.random()
+        }]);
+        
+        // Also trigger a refresh for the main order data
+        fetchOrder();
+      }
+    });
+
+    const unsubscribeOrderUpdate = wsService.subscribe('order_updated', (data) => {
+      if (data.order?.id === orderId) {
+        fetchOrder();
+      }
+    });
+
+    // Connect WebSocket if not already connected
+    if (!wsService.ws || wsService.ws.readyState !== WebSocket.OPEN) {
+      wsService.connect();
+    }
+
+    return () => {
+      stopPolling();
+      unsubscribeLog();
+      unsubscribeNovaAct();
+      unsubscribeOrderUpdate();
+    };
+  }, [fetchOrder, stopPolling, orderId]);
 
   // Handle polling based on order status
   useEffect(() => {
@@ -141,6 +182,104 @@ const OrderDetails = ({ addNotification }) => {
       });
     } finally {
       setShowCancelModal(false);
+    }
+  };
+
+  const handleTakeControl = async () => {
+    setControlLoading(true);
+    try {
+      const response = await fetch(`/api/orders/${orderId}/take-control`, { method: 'POST' });
+      
+      if (!response.ok) {
+        throw new Error('Failed to take manual control');
+      }
+      
+      const result = await response.json();
+      if (result.success) {
+        setManualControlEnabled(true);
+        addNotification({
+          type: 'success',
+          header: 'Manual Control Enabled',
+          content: 'You can now interact with the browser directly'
+        });
+      } else {
+        throw new Error(result.error || 'Failed to enable manual control');
+      }
+    } catch (error) {
+      addNotification({
+        type: 'error',
+        header: 'Failed to take control',
+        content: error.message
+      });
+    } finally {
+      setControlLoading(false);
+    }
+  };
+
+  const handleReleaseControl = async () => {
+    setControlLoading(true);
+    try {
+      const response = await fetch(`/api/orders/${orderId}/release-control`, { method: 'POST' });
+      
+      if (!response.ok) {
+        throw new Error('Failed to release manual control');
+      }
+      
+      const result = await response.json();
+      if (result.success) {
+        setManualControlEnabled(false);
+        addNotification({
+          type: 'success',
+          header: 'Manual Control Released',
+          content: 'Automation has been restored'
+        });
+      } else {
+        throw new Error(result.error || 'Failed to release manual control');
+      }
+    } catch (error) {
+      addNotification({
+        type: 'error',
+        header: 'Failed to release control',
+        content: error.message
+      });
+    } finally {
+      setControlLoading(false);
+    }
+  };
+
+  const handleResumeNovaAct = async () => {
+    setControlLoading(true);
+    try {
+      const response = await fetch(`/api/orders/${orderId}/resume-nova-act`, { method: 'POST' });
+      
+      if (!response.ok) {
+        throw new Error('Failed to resume Nova Act');
+      }
+      
+      const result = await response.json();
+      if (result.success) {
+        addNotification({
+          type: 'success',
+          header: 'Nova Act Resumed',
+          content: 'Nova Act automation has been resumed successfully'
+        });
+        fetchOrder(); // Refresh order data
+      } else {
+        addNotification({
+          type: 'warning',
+          header: 'Nova Act Resume Result',
+          content: result.message || 'Nova Act resumed but may require further attention'
+        });
+        fetchOrder(); // Refresh order data
+      }
+    } catch (error) {
+      addNotification({
+        type: 'error',
+        header: 'Failed to resume Nova Act',
+        content: error.message
+      });
+    } finally {
+      setControlLoading(false);
     }
   };
 
@@ -323,6 +462,86 @@ const OrderDetails = ({ addNotification }) => {
           </div>
         </Container>
 
+        {/* Nova Act Real-time Updates */}
+        {order.automation_method === 'nova_act' && novaActUpdates.length > 0 && (
+          <Container 
+            header={
+              <Header 
+                variant="h3" 
+                counter={`(${novaActUpdates.length})`}
+                description="Real-time Nova Act automation updates"
+              >
+                Nova Act Live Updates
+              </Header>
+            }
+          >
+            <div style={{ 
+              maxHeight: '300px',
+              overflowY: 'auto',
+              padding: '0',
+              backgroundColor: '#f8f9fa',
+              border: '1px solid #e9ecef',
+              borderRadius: '4px'
+            }}>
+              {novaActUpdates.slice(-10).map((update) => {
+                const timestamp = new Date(update.timestamp).toLocaleTimeString();
+                const getUpdateColor = (type) => {
+                  switch (type) {
+                    case 'error_occurred': return '#dc3545';
+                    case 'agent_thinking': return '#6f42c1';
+                    case 'action_performed': return '#28a745';
+                    case 'command_started': return '#007bff';
+                    case 'report_available': return '#17a2b8';
+                    default: return '#6c757d';
+                  }
+                };
+                
+                return (
+                  <div
+                    key={update.id}
+                    style={{
+                      padding: '8px 12px',
+                      borderBottom: '1px solid #e9ecef',
+                      fontSize: '13px'
+                    }}
+                  >
+                    <div style={{ 
+                      display: 'flex', 
+                      alignItems: 'center', 
+                      gap: '8px',
+                      marginBottom: '4px'
+                    }}>
+                      <span style={{ 
+                        color: '#6c757d',
+                        fontSize: '12px'
+                      }}>
+                        {timestamp}
+                      </span>
+                      <span style={{ 
+                        color: getUpdateColor(update.update_type),
+                        fontWeight: 'bold',
+                        fontSize: '12px'
+                      }}>
+                        {update.update_type.replace('_', ' ').toUpperCase()}
+                      </span>
+                    </div>
+                    <div style={{ 
+                      color: '#495057',
+                      marginLeft: '16px'
+                    }}>
+                      {update.data.thought && `💭 ${update.data.thought}`}
+                      {update.data.action && `⚡ ${update.data.action}`}
+                      {update.data.command && `🚀 ${update.data.command}`}
+                      {update.data.error && `❌ ${update.data.error}`}
+                      {update.data.html_path && `📊 Report available (${update.data.total_steps} steps)`}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </Container>
+        )}
+
         {(order.customer_name || order.shipping_address) && (
           <Container header={<Header variant="h3">Customer & Shipping</Header>}>
             <ColumnLayout columns={2}>
@@ -413,6 +632,7 @@ const OrderDetails = ({ addNotification }) => {
                     Screenshots
                   </Button>
                 )}
+
                 <Button
                   iconName="play"
                   onClick={() => setShowSessionReplay(true)}
@@ -441,7 +661,7 @@ const OrderDetails = ({ addNotification }) => {
               screenshots.length > 0 && (
                 <Button
                   variant="primary"
-                  iconName="camera"
+                  iconName="view-full"
                   onClick={() => setShowLiveViewer(true)}
                 >
                   View Screenshots
@@ -460,23 +680,29 @@ const OrderDetails = ({ addNotification }) => {
             </Box>
           ) : (
             screenshots.map((screenshot, index) => (
-              <Container 
-                key={index}
-                header={<Header variant="h3">{screenshot.step || `Screenshot ${index + 1}`}</Header>}
-              >
-                <Box>
-                  <img 
-                    src={screenshot.url} 
-                    alt={screenshot.description || `Screenshot ${index + 1}`}
-                    style={{ maxWidth: '100%', height: 'auto' }}
-                  />
-                  {screenshot.description && (
-                    <Box variant="small" color="text-body-secondary" margin={{ top: 'xs' }}>
-                      {screenshot.description}
-                    </Box>
-                  )}
-                </Box>
-              </Container>
+              <Box key={index} padding="m">
+                <SpaceBetween size="s">
+                  <Header variant="h4">{screenshot.step || `Screenshot ${index + 1}`}</Header>
+                  <Box>
+                    <img 
+                      src={screenshot.url} 
+                      alt={screenshot.description || `Screenshot ${index + 1}`}
+                      style={{ 
+                        maxWidth: '100%', 
+                        height: 'auto',
+                        border: '1px solid #e9ecef',
+                        borderRadius: '8px',
+                        boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+                      }}
+                    />
+                    {screenshot.description && (
+                      <Box variant="small" color="text-body-secondary" margin={{ top: 'xs' }}>
+                        {screenshot.description}
+                      </Box>
+                    )}
+                  </Box>
+                </SpaceBetween>
+              </Box>
             ))
           )}
         </SpaceBetween>
@@ -594,6 +820,39 @@ const OrderDetails = ({ addNotification }) => {
             >
               Refresh
             </Button>
+            {order?.status === 'processing' && order?.automation_method === 'strands' && (
+              <>
+                {!manualControlEnabled ? (
+                  <Button 
+                    variant="normal"
+                    iconName="settings"
+                    onClick={handleTakeControl}
+                    loading={controlLoading}
+                  >
+                    Take Control
+                  </Button>
+                ) : (
+                  <Button 
+                    variant="primary"
+                    iconName="play"
+                    onClick={handleReleaseControl}
+                    loading={controlLoading}
+                  >
+                    Release Control
+                  </Button>
+                )}
+              </>
+            )}
+            {order?.status === 'requires_human' && order?.automation_method === 'nova_act' && (
+              <Button 
+                variant="primary"
+                iconName="play"
+                onClick={handleResumeNovaAct}
+                loading={controlLoading}
+              >
+                Resume Nova Act
+              </Button>
+            )}
             {order?.status === 'pending' && (
               <Button 
                 variant="normal"
@@ -615,6 +874,22 @@ const OrderDetails = ({ addNotification }) => {
       </Header>
 
 
+
+      {/* Manual Control Status */}
+      {manualControlEnabled && (
+        <Alert type="info" header="Manual Control Active">
+          You have manual control of the browser. You can interact with the page directly. 
+          Click "Release Control" to return to automation.
+        </Alert>
+      )}
+
+      {/* Nova Act CAPTCHA Status */}
+      {order?.status === 'requires_human' && order?.automation_method === 'nova_act' && (
+        <Alert type="warning" header="CAPTCHA Detected - Human Intervention Required">
+          Nova Act has encountered a CAPTCHA or security challenge that requires human intervention. 
+          Please use the Live Browser View to solve the CAPTCHA, then click "Resume Nova Act" to continue automation.
+        </Alert>
+      )}
 
       {/* Error Display */}
       {order.error && (
@@ -641,10 +916,11 @@ const OrderDetails = ({ addNotification }) => {
               id: 'screenshots',
               label: `Screenshots (${(order?.screenshots || []).length})`
             },
-            ...(order?.status === 'processing' ? [{
+            ...(['processing', 'requires_human'].includes(order?.status) ? [{
               id: 'live-view',
               label: 'Live Browser View'
             }] : []),
+
             {
               id: 'raw-data',
               label: 'Raw Data'
@@ -662,6 +938,7 @@ const OrderDetails = ({ addNotification }) => {
             isVisible={true}
           />
         )}
+
         {activeTab === 'raw-data' && (
           <Container
             header={
@@ -738,6 +1015,8 @@ const OrderDetails = ({ addNotification }) => {
         isVisible={showSessionReplay}
         onClose={() => setShowSessionReplay(false)}
       />
+
+
     </SpaceBetween>
   );
 };

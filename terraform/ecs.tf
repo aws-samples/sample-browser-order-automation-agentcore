@@ -47,7 +47,7 @@ resource "aws_ecs_task_definition" "app" {
   container_definitions = jsonencode([
     {
       name  = "${var.project_name}-container"
-      image = "${aws_ecr_repository.timecard_processor.repository_url}:latest"
+      image = "${aws_ecr_repository.order_automation.repository_url}:latest"
 
       portMappings = [
         {
@@ -68,6 +68,10 @@ resource "aws_ecs_task_definition" "app" {
         {
           name  = "DATABASE_URL"
           value = "postgresql://${aws_db_instance.main.username}:${random_password.db_password.result}@${aws_db_instance.main.endpoint}/${aws_db_instance.main.db_name}"
+        },
+        {
+          name  = "ENVIRONMENT"
+          value = "production"
         },
         {
           name  = "FLASK_ENV"

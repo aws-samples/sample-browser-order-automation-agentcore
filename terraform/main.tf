@@ -27,7 +27,7 @@ provider "aws" {
 }
 
 # ECR repository for Docker images
-resource "aws_ecr_repository" "timecard_processor" {
+resource "aws_ecr_repository" "order_automation" {
   name                 = "${var.project_name}-app"
   image_tag_mutability = "MUTABLE"
 
@@ -35,14 +35,12 @@ resource "aws_ecr_repository" "timecard_processor" {
     scan_on_push = true
   }
 
-
-
   tags = var.tags
 }
 
 # ECR lifecycle policy
-resource "aws_ecr_lifecycle_policy" "timecard_processor" {
-  repository = aws_ecr_repository.timecard_processor.name
+resource "aws_ecr_lifecycle_policy" "order_automation" {
+  repository = aws_ecr_repository.order_automation.name
 
   policy = jsonencode({
     rules = [

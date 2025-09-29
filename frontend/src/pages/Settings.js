@@ -1,1003 +1,775 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
+  Container,
   Header,
   SpaceBetween,
-  Container,
+  Box,
+  Button,
   FormField,
   Input,
-  Button,
-  Alert,
-  Box,
-  ColumnLayout,
   Select,
-  Tabs,
+  Spinner,
   Table,
   Modal,
-  Form,
-  TextContent,
-  Badge
+  Toggle,
 } from '@cloudscape-design/components';
 
 const Settings = ({ addNotification }) => {
-  // System Configuration State
-  const [systemConfig, setSystemConfig] = useState({
-    nova_act_api_key: '',
-    agentcore_region: 'us-west-2',
-    default_model: 'us.anthropic.claude-3-7-sonnet-20250219-v1:0',
-    selected_browser_id: ''
-  });
-
-  // AgentCore State
-  const [browsers, setBrowsers] = useState([]);
-  const [browserSessions, setBrowserSessions] = useState([]);
-  const [selectedBrowser, setSelectedBrowser] = useState(null);
-
-  // Retailer State
-  const [retailers, setRetailers] = useState([]);
-  const [retailerConfigs, setRetailerConfigs] = useState({});
-  const [newRetailer, setNewRetailer] = useState({
-    id: '',
-    name: '',
-    base_url: '',
-    description: ''
-  });
-
-  // Loading States
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [loadingBrowsers, setLoadingBrowsers] = useState(false);
-  const [loadingSessions, setLoadingSessions] = useState(false);
-  const [creatingBrowser, setCreatingBrowser] = useState(false);
-  const [loadingRetailers, setLoadingRetailers] = useState(false);
+  const [systemConfig, setSystemConfig] = useState({});
+  const [originalConfig, setOriginalConfig] = useState({});
+  const [hasChanges, setHasChanges] = useState(false);
+  const [isEditingApiKey, setIsEditingApiKey] = useState(false);
 
-  // Modal States
-  const [showCreateBrowserModal, setShowCreateBrowserModal] = useState(false);
-  const [showRetailerModal, setShowRetailerModal] = useState(false);
+  // AWS Resources state
+  const [awsStatus, setAwsStatus] = useState(null);
+  const [iamLoading, setIamLoading] = useState(false);
+  const [iamLoaded, setIamLoaded] = useState(false);
+  const [s3Loading, setS3Loading] = useState(false);
+  const [s3Loaded, setS3Loaded] = useState(false);
 
-  // Fetch system configuration
-  const fetchSystemConfig = useCallback(async () => {
+  // Retailer URLs state
+  const [retailerUrls, setRetailerUrls] = useState([]);
+  const [urlsLoading, setUrlsLoading] = useState(false);
+  const [showUrlModal, setShowUrlModal] = useState(false);
+  const [editingUrl, setEditingUrl] = useState(null);
+  const [urlFormData, setUrlFormData] = useState({
+    retailer: '',
+    website_name: '',
+    starting_url: '',
+    is_default: false
+  });
+
+  const loadSettings = useCallback(async () => {
     try {
-      const response = await fetch('/api/config/system');
-      const data = await response.json();
+      setLoading(true);
 
-      setSystemConfig(prev => ({
+      // Only load system config (fast)
+      const configResponse = await fetch('/api/settings/config');
+      if (configResponse.ok) {
+        const configData = await configResponse.json();
+        const config = configData.config || {};
+        setSystemConfig(config);
+        setOriginalConfig(config);
+        setHasChanges(false);
+      }
+
+    } catch (error) {
+      console.error('Failed to load settings:', error);
+      addNotification({
+        type: 'error',
+        header: 'Failed to load settings',
+        content: error.message
+      });
+    } finally {
+      setLoading(false);
+    }
+  }, [addNotification]);
+
+  const loadIamRoles = useCallback(async () => {
+    if (iamLoaded || iamLoading) return;
+
+    try {
+      setIamLoading(true);
+      const response = await fetch('/api/settings/aws/search-iam-roles');
+
+      if (response.ok) {
+        const data = await response.json();
+        setAwsStatus(prev => ({
+          ...prev,
+          execution_roles: data.execution_roles || []
+        }));
+      } else {
+        throw new Error('Failed to load IAM roles');
+      }
+
+      setIamLoaded(true);
+    } catch (error) {
+      console.warn('IAM roles loading failed:', error);
+      setAwsStatus(prev => ({
         ...prev,
-        ...data.system
+        execution_roles: []
       }));
-
-      setLoading(false);
-    } catch (error) {
-      console.error('Failed to fetch system config:', error);
-      addNotification({
-        type: 'error',
-        header: 'Failed to load system configuration',
-        content: error.message
-      });
-      setLoading(false);
-    }
-  }, [addNotification]);
-
-  // Fetch retailers
-  const fetchRetailers = useCallback(async () => {
-    setLoadingRetailers(true);
-    try {
-      const response = await fetch('/api/config/retailers');
-      const data = await response.json();
-
-      setRetailers(data.supported_retailers || []);
-      setRetailerConfigs(data.retailer_configs || {});
-
-    } catch (error) {
-      console.error('Failed to fetch retailers:', error);
-      addNotification({
-        type: 'error',
-        header: 'Failed to load retailers',
-        content: error.message
-      });
+      setIamLoaded(true);
     } finally {
-      setLoadingRetailers(false);
+      setIamLoading(false);
     }
-  }, [addNotification]);
+  }, [iamLoaded, iamLoading]);
 
-  // Fetch browser sessions
-  const fetchBrowserSessions = useCallback(async (browserId) => {
-    if (!browserId) return;
+  const loadS3Buckets = useCallback(async () => {
+    if (s3Loaded || s3Loading) return;
 
-    setLoadingSessions(true);
     try {
-      const response = await fetch(`/api/agentcore/browsers/${browserId}/sessions`);
-      const data = await response.json();
+      setS3Loading(true);
+      const response = await fetch('/api/settings/aws/search-s3-buckets');
 
-      setBrowserSessions(data.sessions || []);
-
-    } catch (error) {
-      console.error('Failed to fetch browser sessions:', error);
-      addNotification({
-        type: 'error',
-        header: 'Failed to load browser sessions',
-        content: error.message
-      });
-    } finally {
-      setLoadingSessions(false);
-    }
-  }, [addNotification]);
-
-  // Fetch AgentCore browsers
-  const fetchBrowsers = useCallback(async () => {
-    setLoadingBrowsers(true);
-    try {
-      const response = await fetch(`/api/agentcore/browsers?region=${systemConfig.agentcore_region}`);
-      const data = await response.json();
-
-      setBrowsers(data.browsers || []);
-
-      // If a browser is selected, fetch its sessions
-      if (systemConfig.selected_browser_id) {
-        const browser = data.browsers?.find(b => b.browser_id === systemConfig.selected_browser_id);
-        if (browser) {
-          setSelectedBrowser(browser);
-          await fetchBrowserSessions(browser.browser_id);
-        }
+      if (response.ok) {
+        const data = await response.json();
+        setAwsStatus(prev => ({
+          ...prev,
+          s3_buckets: data.s3_buckets || []
+        }));
+      } else {
+        throw new Error('Failed to load S3 buckets');
       }
 
+      setS3Loaded(true);
     } catch (error) {
-      console.error('Failed to fetch browsers:', error);
-      addNotification({
-        type: 'error',
-        header: 'Failed to load browsers',
-        content: error.message
-      });
+      console.warn('S3 buckets loading failed:', error);
+      setAwsStatus(prev => ({
+        ...prev,
+        s3_buckets: []
+      }));
+      setS3Loaded(true);
     } finally {
-      setLoadingBrowsers(false);
+      setS3Loading(false);
     }
-  }, [systemConfig.agentcore_region, systemConfig.selected_browser_id, fetchBrowserSessions, addNotification]);
+  }, [s3Loaded, s3Loading]);
 
-  // Create browser
-  const createBrowser = async (browserConfig) => {
-    setCreatingBrowser(true);
+  const loadRetailerUrls = useCallback(async () => {
     try {
-      const response = await fetch('/api/agentcore/browsers', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          region: systemConfig.agentcore_region,
-          ...browserConfig
-        })
-      });
-
-      const browser = await response.json();
-
-      addNotification({
-        type: 'success',
-        header: 'Browser created successfully',
-        content: `Browser ${browser.name} has been created`
-      });
-
-      setShowCreateBrowserModal(false);
-      await fetchBrowsers();
-
-    } catch (error) {
-      console.error('Failed to create browser:', error);
-      addNotification({
-        type: 'error',
-        header: 'Failed to create browser',
-        content: error.message
-      });
-    } finally {
-      setCreatingBrowser(false);
-    }
-  };
-
-  // Delete browser
-  const deleteBrowser = async (browserId) => {
-    try {
-      await fetch(`/api/agentcore/browsers/${browserId}`, {
-        method: 'DELETE'
-      });
-
-      addNotification({
-        type: 'success',
-        header: 'Browser deleted',
-        content: 'Browser has been deleted successfully'
-      });
-
-      await fetchBrowsers();
-
-    } catch (error) {
-      console.error('Failed to delete browser:', error);
-      addNotification({
-        type: 'error',
-        header: 'Failed to delete browser',
-        content: error.message
-      });
-    }
-  };
-
-  // Create session
-  const createSession = async (browserId) => {
-    try {
-      const response = await fetch(`/api/agentcore/browsers/${browserId}/sessions`, {
-        method: 'POST'
-      });
-
-      const session = await response.json();
-
-      addNotification({
-        type: 'success',
-        header: 'Session created',
-        content: `Session ${session.session_id} has been created`
-      });
-
-      await fetchBrowserSessions(browserId);
-
-    } catch (error) {
-      console.error('Failed to create session:', error);
-      addNotification({
-        type: 'error',
-        header: 'Failed to create session',
-        content: error.message
-      });
-    }
-  };
-
-  // Delete session
-  const deleteSession = async (sessionId) => {
-    try {
-      await fetch(`/api/agentcore/sessions/${sessionId}`, {
-        method: 'DELETE'
-      });
-
-      addNotification({
-        type: 'success',
-        header: 'Session deleted',
-        content: 'Session has been deleted successfully'
-      });
-
-      if (selectedBrowser) {
-        await fetchBrowserSessions(selectedBrowser.browser_id);
+      setUrlsLoading(true);
+      const response = await fetch('/api/config/retailer-urls');
+      if (response.ok) {
+        const data = await response.json();
+        setRetailerUrls(data.retailer_urls || []);
       }
-
     } catch (error) {
-      console.error('Failed to delete session:', error);
+      console.error('Failed to load retailer URLs:', error);
       addNotification({
         type: 'error',
-        header: 'Failed to delete session',
-        content: error.message
-      });
-    }
-  };
-
-  // Save system settings
-  const handleSaveSettings = async () => {
-    setSaving(true);
-    try {
-      await fetch('/api/config/system', {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          config_key: 'system_settings',
-          config_value: systemConfig
-        })
-      });
-
-      addNotification({
-        type: 'success',
-        header: 'Settings saved',
-        content: 'System settings have been updated successfully'
-      });
-
-    } catch (error) {
-      console.error('Failed to save settings:', error);
-      addNotification({
-        type: 'error',
-        header: 'Failed to save settings',
+        header: 'Failed to load retailer URLs',
         content: error.message
       });
     } finally {
-      setSaving(false);
+      setUrlsLoading(false);
     }
-  };
+  }, [addNotification]);
 
-  // Add new retailer
-  const addRetailer = async () => {
+  const handleSaveUrl = async () => {
     try {
-      const response = await fetch('/api/config/retailers', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(newRetailer)
+      const method = editingUrl ? 'PUT' : 'POST';
+      const url = editingUrl ? `/api/config/retailer-urls/${editingUrl.id}` : '/api/config/retailer-urls';
+      
+      const response = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(urlFormData)
       });
 
       if (response.ok) {
         addNotification({
           type: 'success',
-          header: 'Retailer added',
-          content: `${newRetailer.name} has been added successfully`
+          header: editingUrl ? 'URL Updated' : 'URL Added',
+          content: `Retailer URL has been ${editingUrl ? 'updated' : 'added'} successfully`
         });
-
-        setNewRetailer({ id: '', name: '', base_url: '', description: '' });
-        setShowRetailerModal(false);
-        await fetchRetailers();
+        setShowUrlModal(false);
+        setEditingUrl(null);
+        setUrlFormData({ retailer: '', website_name: '', starting_url: '', is_default: false });
+        loadRetailerUrls();
+      } else {
+        throw new Error('Failed to save URL');
       }
     } catch (error) {
-      console.error('Failed to add retailer:', error);
       addNotification({
         type: 'error',
-        header: 'Failed to add retailer',
+        header: 'Save Failed',
         content: error.message
       });
     }
   };
 
-  // Delete retailer
-  const deleteRetailer = async (retailerId) => {
+  const handleDeleteUrl = async (urlId) => {
     try {
-      await fetch(`/api/config/retailers/${retailerId}`, {
+      const response = await fetch(`/api/config/retailer-urls/${urlId}`, {
         method: 'DELETE'
       });
 
-      addNotification({
-        type: 'success',
-        header: 'Retailer deleted',
-        content: 'Retailer has been removed successfully'
-      });
-
-      await fetchRetailers();
+      if (response.ok) {
+        addNotification({
+          type: 'success',
+          header: 'URL Deleted',
+          content: 'Retailer URL has been deleted successfully'
+        });
+        loadRetailerUrls();
+      } else {
+        throw new Error('Failed to delete URL');
+      }
     } catch (error) {
-      console.error('Failed to delete retailer:', error);
       addNotification({
         type: 'error',
-        header: 'Failed to delete retailer',
+        header: 'Delete Failed',
         content: error.message
       });
     }
   };
 
-  // Initialize data
-  useEffect(() => {
-    fetchSystemConfig();
-    fetchRetailers();
-  }, [fetchSystemConfig, fetchRetailers]);
+  const handleEditUrl = (url) => {
+    setEditingUrl(url);
+    setUrlFormData({
+      retailer: url.retailer,
+      website_name: url.website_name,
+      starting_url: url.starting_url,
+      is_default: url.is_default
+    });
+    setShowUrlModal(true);
+  };
+
+  const handleAddUrl = () => {
+    setEditingUrl(null);
+    setUrlFormData({ retailer: '', website_name: '', starting_url: '', is_default: false });
+    setShowUrlModal(true);
+  };
 
   useEffect(() => {
-    if (!loading && systemConfig.agentcore_region) {
-      fetchBrowsers();
-    }
-  }, [loading, systemConfig.agentcore_region, fetchBrowsers]);
+    loadSettings();
+    loadRetailerUrls();
+  }, [loadSettings, loadRetailerUrls]);
 
-  // Set default browser if none selected
-  useEffect(() => {
-    if (browsers.length > 0 && !systemConfig.selected_browser_id) {
-      const defaultBrowser = browsers[0];
-      setSelectedBrowser(defaultBrowser);
-      setSystemConfig(prev => ({
-        ...prev,
-        selected_browser_id: defaultBrowser.browser_id
-      }));
-    }
-  }, [browsers, systemConfig.selected_browser_id]);
+  const validateNovaActApiKey = (key) => {
+    // UUID v4 format: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    return uuidRegex.test(key);
+  };
 
-  // Browser table columns
-  const browserColumns = [
-    {
-      id: 'browser_id',
-      header: 'Browser ID',
-      cell: item => item.browser_id,
-      sortingField: 'browser_id'
-    },
-    {
-      id: 'name',
-      header: 'Name',
-      cell: item => (
-        <SpaceBetween direction="horizontal" size="xs">
-          <span>{item.name}</span>
-          {item.managed_by && (
-            <Badge color="blue">{item.managed_by} Managed</Badge>
-          )}
-        </SpaceBetween>
-      ),
-      sortingField: 'name'
-    },
-    {
-      id: 'status',
-      header: 'Status',
-      cell: item => (
-        <Badge color={item.status === 'READY' ? 'green' : 'grey'}>
-          {item.status}
-        </Badge>
-      ),
-      sortingField: 'status'
-    },
-    {
-      id: 'description',
-      header: 'Description',
-      cell: item => item.description || 'No description'
-    },
-    {
-      id: 'actions',
-      header: 'Actions',
-      cell: item => (
-        <SpaceBetween direction="horizontal" size="xs">
-          <Button
-            size="small"
-            onClick={async () => {
-              setSelectedBrowser(item);
-              setSystemConfig(prev => ({
-                ...prev,
-                selected_browser_id: item.browser_id
-              }));
-              await fetchBrowserSessions(item.browser_id);
-            }}
-          >
-            Select as Default
-          </Button>
-          {!item.managed_by && (
-            <Button
-              size="small"
-              variant="normal"
-              onClick={() => deleteBrowser(item.browser_id)}
-            >
-              Delete
-            </Button>
-          )}
-        </SpaceBetween>
-      )
-    }
-  ];
 
-  // Session table columns
-  const sessionColumns = [
-    {
-      id: 'session_id',
-      header: 'Session ID',
-      cell: item => item.session_id,
-      sortingField: 'session_id'
-    },
-    {
-      id: 'status',
-      header: 'Status',
-      cell: item => (
-        <Badge color={item.status === 'ACTIVE' ? 'green' : 'grey'}>
-          {item.status}
-        </Badge>
-      ),
-      sortingField: 'status'
-    },
-    {
-      id: 'created_at',
-      header: 'Created',
-      cell: item => new Date(item.created_at).toLocaleString(),
-      sortingField: 'created_at'
-    },
-    {
-      id: 'actions',
-      header: 'Actions',
-      cell: item => (
-        <SpaceBetween direction="horizontal" size="xs">
-          <Button
-            size="small"
-            onClick={() => {
-              // Sessions are now read-only for viewing purposes
-              addNotification({
-                type: 'info',
-                header: 'Session Information',
-                content: `Session ${item.session_id} is active. Sessions are automatically managed by agents.`
-              });
-            }}
-          >
-            View
-          </Button>
-          <Button
-            size="small"
-            variant="normal"
-            onClick={() => deleteSession(item.session_id)}
-          >
-            Delete
-          </Button>
-        </SpaceBetween>
-      )
-    }
-  ];
 
-  // Retailer table columns
-  const retailerColumns = [
-    {
-      id: 'id',
-      header: 'ID',
-      cell: item => item,
-      sortingField: 'id'
-    },
-    {
-      id: 'name',
-      header: 'Name',
-      cell: item => retailerConfigs[item]?.name || item,
-      sortingField: 'name'
-    },
-    {
-      id: 'base_url',
-      header: 'Base URL',
-      cell: item => (
-        <a href={retailerConfigs[item]?.base_url} target="_blank" rel="noopener noreferrer">
-          {retailerConfigs[item]?.base_url}
-        </a>
-      )
-    },
-    {
-      id: 'description',
-      header: 'Description',
-      cell: item => retailerConfigs[item]?.description || 'No description'
-    },
-    {
-      id: 'status',
-      header: 'Status',
-      cell: item => (
-        <Badge color={retailerConfigs[item]?.status === 'active' ? 'green' : 'grey'}>
-          {retailerConfigs[item]?.status || 'active'}
-        </Badge>
-      )
-    },
-    {
-      id: 'actions',
-      header: 'Actions',
-      cell: item => (
-        <SpaceBetween direction="horizontal" size="xs">
-          <Button
-            size="small"
-            variant="normal"
-            onClick={() => deleteRetailer(item)}
-          >
-            Delete
-          </Button>
-        </SpaceBetween>
-      )
+  const handleConfigChange = (key, value) => {
+    // Nova Act API Key 편집 상태 관리
+    if (key === 'nova_act_api_key') {
+      setIsEditingApiKey(true);
     }
-  ];
+
+    // 로컬 상태만 업데이트 (저장하지 않음)
+    setSystemConfig(prev => {
+      const newConfig = { ...prev, [key]: value };
+      // 변경사항이 있는지 확인
+      const hasChanges = JSON.stringify(newConfig) !== JSON.stringify(originalConfig);
+      setHasChanges(hasChanges);
+      return newConfig;
+    });
+  };
+
+  const handleSaveSettings = async () => {
+    try {
+      // Nova Act API Key 검증
+      if (systemConfig.nova_act_api_key && !validateNovaActApiKey(systemConfig.nova_act_api_key)) {
+        addNotification({
+          type: 'error',
+          header: 'Invalid API Key',
+          content: 'Nova Act API Key must be in UUID format (e.g., 12345678-1234-1234-1234-123456789abc)'
+        });
+        return;
+      }
+
+      const response = await fetch('/api/settings/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ config: systemConfig })
+      });
+
+      const result = await response.json();
+
+      if (result.status === 'success') {
+        // 저장 성공 후 DB에서 최신 설정을 다시 로드하여 동기화
+        const configResponse = await fetch('/api/settings/config');
+        if (configResponse.ok) {
+          const configData = await configResponse.json();
+          const updatedConfig = configData.config || {};
+          setSystemConfig(updatedConfig);
+          setOriginalConfig(updatedConfig);
+        }
+
+        setHasChanges(false);
+        setIsEditingApiKey(false); // 저장 후 API 키 편집 상태 해제
+        addNotification({
+          type: 'success',
+          header: 'Settings Saved',
+          content: 'All configuration settings have been saved successfully'
+        });
+      } else {
+        addNotification({
+          type: 'error',
+          header: 'Save Failed',
+          content: result.message || 'Failed to save configuration'
+        });
+      }
+
+    } catch (error) {
+      addNotification({
+        type: 'error',
+        header: 'Save Error',
+        content: error.message
+      });
+    }
+  };
+
+  const handleResetToDefaults = () => {
+    // 기본값으로 리셋 (저장하지 않음)
+    const defaultConfig = {
+      agentcore_region: 'us-west-2',
+      session_replay_s3_bucket: '',
+      session_replay_s3_prefix: 'session-replays/',
+      browser_session_timeout: 3600,
+      max_concurrent_orders: 5,
+      default_model: 'us.anthropic.claude-sonnet-4-20250514-v1:0',
+      nova_act_api_key: '',
+      execution_role_arn: '',
+      processing_timeout: 1800
+    };
+
+    setSystemConfig(defaultConfig);
+    const hasChanges = JSON.stringify(defaultConfig) !== JSON.stringify(originalConfig);
+    setHasChanges(hasChanges);
+    setIsEditingApiKey(true); // Reset 시 API 키 편집 가능하도록
+
+    addNotification({
+      type: 'info',
+      header: 'Reset to Defaults',
+      content: 'Settings have been reset to default values. Click Save to apply changes.'
+    });
+  };
 
   if (loading) {
-    return <Box>Loading settings...</Box>;
+    return (
+      <Container>
+        <Box textAlign="center" padding="xxl">
+          <Spinner size="large" />
+          <Box variant="p" padding={{ top: 's' }}>Loading settings...</Box>
+        </Box>
+      </Container>
+    );
   }
-
-  const tabs = [
-    {
-      label: 'System Settings',
-      id: 'system',
-      content: (
-        <Container>
-          <Form
-            actions={
-              <Box float="right">
-                <SpaceBetween direction="horizontal" size="xs">
-                  <Button
-                    variant="primary"
-                    loading={saving}
-                    onClick={handleSaveSettings}
-                  >
-                    Save Settings
-                  </Button>
-                </SpaceBetween>
-              </Box>
-            }
-          >
-            <SpaceBetween size="l">
-              <FormField
-                label="Nova Act API Key"
-                description="API key for Nova Act automation service"
-              >
-                <Input
-                  value={systemConfig.nova_act_api_key || ''}
-                  onChange={({ detail }) =>
-                    setSystemConfig(prev => ({ ...prev, nova_act_api_key: detail.value }))
-                  }
-                  placeholder="Enter your Nova Act API key"
-                  type="password"
-                />
-              </FormField>
-
-              <ColumnLayout columns={2}>
-                <FormField
-                  label="AgentCore Region"
-                  description="AWS region for AgentCore Browser service"
-                >
-                  <Select
-                    selectedOption={{
-                      label: systemConfig.agentcore_region || 'us-west-2',
-                      value: systemConfig.agentcore_region || 'us-west-2'
-                    }}
-                    onChange={({ detail }) => {
-                      setSystemConfig(prev => ({ ...prev, agentcore_region: detail.selectedOption.value }));
-                      // Refresh browsers when region changes
-                      fetchBrowsers();
-                    }}
-                    options={[
-                      { label: 'us-west-2', value: 'us-west-2' },
-                      { label: 'us-east-1', value: 'us-east-1' },
-                      { label: 'eu-west-1', value: 'eu-west-1' },
-                      { label: 'ap-southeast-1', value: 'ap-southeast-1' }
-                    ]}
-                  />
-                </FormField>
-
-                <FormField
-                  label="Default Model"
-                  description="Default AI model for automation"
-                >
-                  <Select
-                    selectedOption={{
-                      label: systemConfig.default_model === 'us.anthropic.claude-sonnet-4-20250514-v1:0' ? 'Claude Sonnet 4' :
-                             systemConfig.default_model === 'us.anthropic.claude-3-7-sonnet-20250219-v1:0' ? 'Claude 3.7 Sonnet' :
-                             systemConfig.default_model === 'us.amazon.nova-pro-v1:0' ? 'Amazon Nova Pro' :
-                             systemConfig.default_model === 'openai.gpt-oss-20b-1:0' ? 'GPT-OSS 20B' :
-                             systemConfig.default_model === 'openai.gpt-oss-120b-1:0' ? 'GPT-OSS 120B' : 'Claude 3.7 Sonnet',
-                      value: systemConfig.default_model || 'us.anthropic.claude-3-7-sonnet-20250219-v1:0'
-                    }}
-                    onChange={({ detail }) =>
-                      setSystemConfig(prev => ({ ...prev, default_model: detail.selectedOption.value }))
-                    }
-                    options={[
-                      { label: 'Claude Sonnet 4', value: 'us.anthropic.claude-sonnet-4-20250514-v1:0' },
-                      { label: 'Claude 3.7 Sonnet', value: 'us.anthropic.claude-3-7-sonnet-20250219-v1:0' },
-                      { label: 'Amazon Nova Pro', value: 'us.amazon.nova-pro-v1:0' },
-                      { label: 'GPT-OSS 20B', value: 'openai.gpt-oss-20b-1:0' },
-                      { label: 'GPT-OSS 120B', value: 'openai.gpt-oss-120b-1:0' }
-                    ]}
-                  />
-                </FormField>
-              </ColumnLayout>
-
-              <FormField
-                label="Default Browser"
-                description="Default AgentCore Browser for agent spawning (AWS managed)"
-              >
-                <Select
-                  selectedOption={
-                    systemConfig.selected_browser_id
-                      ? browsers.find(b => b.browser_id === systemConfig.selected_browser_id) 
-                        ? { 
-                            label: `${browsers.find(b => b.browser_id === systemConfig.selected_browser_id).name} (AWS Managed)`, 
-                            value: systemConfig.selected_browser_id 
-                          }
-                        : { label: systemConfig.selected_browser_id, value: systemConfig.selected_browser_id }
-                      : browsers.length > 0 
-                        ? { 
-                            label: `${browsers[0].name} (AWS Managed)`, 
-                            value: browsers[0].browser_id 
-                          }
-                        : null
-                  }
-                  onChange={async ({ detail }) => {
-                    const browser = browsers.find(b => b.browser_id === detail.selectedOption.value);
-                    setSelectedBrowser(browser);
-                    setSystemConfig(prev => ({ ...prev, selected_browser_id: detail.selectedOption.value }));
-                    await fetchBrowserSessions(detail.selectedOption.value);
-                  }}
-                  options={browsers.map(browser => ({
-                    label: `${browser.name} (${browser.managed_by || 'AWS'} Managed)`,
-                    value: browser.browser_id
-                  }))}
-                  placeholder="AWS AgentCore Browser Tool"
-                  empty="AWS AgentCore Browser Tool will be used"
-                />
-              </FormField>
-
-              <Alert type="info">
-                <TextContent>
-                  <p><strong>AWS AgentCore Browser Tool:</strong> Using AWS managed browser sandbox (aws.browser.v1) for secure web browsing.</p>
-                  <p><strong>Session Management:</strong> Sessions are automatically created when agents are spawned. Each agent gets its own dedicated session.</p>
-                  <p><strong>ARN:</strong> arn:aws:bedrock-agentcore:us-west-2:aws:browser/aws.browser.v1</p>
-                </TextContent>
-              </Alert>
-            </SpaceBetween>
-          </Form>
-        </Container>
-      )
-    },
-    {
-      label: 'AgentCore Browsers',
-      id: 'browsers',
-      content: (
-        <SpaceBetween size="l">
-          <Container
-            header={
-              <Header
-                variant="h2"
-                actions={
-                  <SpaceBetween direction="horizontal" size="xs">
-                    <Button
-                      onClick={fetchBrowsers}
-                      loading={loadingBrowsers}
-                    >
-                      Refresh
-                    </Button>
-                    <Button
-                      variant="primary"
-                      onClick={() => setShowCreateBrowserModal(true)}
-                    >
-                      View Details
-                    </Button>
-                  </SpaceBetween>
-                }
-              >
-                AgentCore Browsers
-              </Header>
-            }
-          >
-            <Table
-              columnDefinitions={browserColumns}
-              items={browsers}
-              loading={loadingBrowsers}
-              loadingText="Loading browsers..."
-              empty={
-                <Box textAlign="center" color="inherit">
-                  <b>No browsers found</b>
-                  <Box padding={{ bottom: 's' }} variant="p" color="inherit">
-                    Create your first browser to get started.
-                  </Box>
-                  <Button onClick={() => setShowCreateBrowserModal(true)}>
-                    View AWS Browser Tool
-                  </Button>
-                </Box>
-              }
-            />
-          </Container>
-
-          {selectedBrowser && (
-            <Container
-              header={
-                <Header
-                  variant="h3"
-                  actions={
-                    <Button
-                      variant="primary"
-                      onClick={() => createSession(selectedBrowser.browser_id)}
-                    >
-                      Create Session
-                    </Button>
-                  }
-                >
-                  Sessions for {selectedBrowser.name}
-                </Header>
-              }
-            >
-              <Table
-                columnDefinitions={sessionColumns}
-                items={browserSessions}
-                loading={loadingSessions}
-                loadingText="Loading sessions..."
-                empty={
-                  <Box textAlign="center" color="inherit">
-                    <b>No sessions found</b>
-                    <Box padding={{ bottom: 's' }} variant="p" color="inherit">
-                      Create a session for this browser.
-                    </Box>
-                    <Button onClick={() => createSession(selectedBrowser.browser_id)}>
-                      Create Session
-                    </Button>
-                  </Box>
-                }
-              />
-            </Container>
-          )}
-        </SpaceBetween>
-      )
-    },
-    {
-      label: 'Retailer Configuration',
-      id: 'retailers',
-      content: (
-        <Container
-          header={
-            <Header
-              variant="h2"
-              actions={
-                <SpaceBetween direction="horizontal" size="xs">
-                  <Button
-                    onClick={fetchRetailers}
-                    loading={loadingRetailers}
-                  >
-                    Refresh
-                  </Button>
-                  <Button
-                    variant="primary"
-                    onClick={() => setShowRetailerModal(true)}
-                  >
-                    Add Retailer
-                  </Button>
-                </SpaceBetween>
-              }
-            >
-              Retailer Management
-            </Header>
-          }
-        >
-          <SpaceBetween size="l">
-            <Alert type="info">
-              <TextContent>
-                <p>Configure supported retailers for order automation. Each retailer requires a name, base URL, and description.</p>
-                <p>Currently supported retailers: <strong>{retailers.length}</strong></p>
-              </TextContent>
-            </Alert>
-
-            <Table
-              columnDefinitions={retailerColumns}
-              items={retailers}
-              loading={loadingRetailers}
-              loadingText="Loading retailers..."
-              empty={
-                <Box textAlign="center" color="inherit">
-                  <b>No retailers configured</b>
-                  <Box padding={{ bottom: 's' }} variant="p" color="inherit">
-                    Add your first retailer to get started with order automation.
-                  </Box>
-                  <Button onClick={() => setShowRetailerModal(true)}>
-                    Add Retailer
-                  </Button>
-                </Box>
-              }
-              header={
-                <Header
-                  counter={`(${retailers.length})`}
-                  description="Manage supported retailers for order automation"
-                >
-                  Configured Retailers
-                </Header>
-              }
-            />
-          </SpaceBetween>
-        </Container>
-      )
-    }
-  ];
 
   return (
     <SpaceBetween size="l">
       <Header
         variant="h1"
-        description="Configure system settings, AgentCore browsers, and retailer configurations"
+        description="Configure AWS services and automation settings for intelligent browser automation"
+        actions={
+          <Button
+            variant="primary"
+            iconName="refresh"
+            onClick={loadSettings}
+            loading={loading}
+          >
+            Refresh
+          </Button>
+        }
       >
-        Settings
+        Automation Settings
       </Header>
 
-      <Tabs tabs={tabs} />
+      {/* AWS Infrastructure */}
+      <Container header={<Header variant="h2">AWS Infrastructure</Header>}>
+        <SpaceBetween size="m">
+          <FormField label="AWS Region" description="Primary AWS region for all services and resources">
+            <Select
+              selectedOption={{
+                label: systemConfig.agentcore_region === 'us-west-2' ? 'US West 2 (Oregon)' :
+                  systemConfig.agentcore_region === 'us-east-1' ? 'US East 1 (N. Virginia)' :
+                    'US West 2 (Oregon)',
+                value: systemConfig.agentcore_region || 'us-west-2'
+              }}
+              onChange={({ detail }) =>
+                handleConfigChange('agentcore_region', detail.selectedOption.value)
+              }
+              options={[
+                { label: 'US West 2 (Oregon)', value: 'us-west-2' },
+                { label: 'US East 1 (N. Virginia)', value: 'us-east-1' }
+              ]}
+            />
+          </FormField>
 
-      {/* Create Browser Modal */}
+          <FormField label="IAM Execution Role" description="IAM role with permissions for AgentCore browser automation">
+            <Select
+              selectedOption={
+                systemConfig.execution_role_arn ? {
+                  label: awsStatus?.execution_roles?.find(role => role.arn === systemConfig.execution_role_arn)?.name ||
+                    systemConfig.execution_role_arn.split('/').pop() ||
+                    systemConfig.execution_role_arn,
+                  value: systemConfig.execution_role_arn
+                } : null
+              }
+              onChange={({ detail }) =>
+                handleConfigChange('execution_role_arn', detail.selectedOption.value)
+              }
+              onFocus={loadIamRoles}
+              options={
+                (() => {
+                  const roleOptions = awsStatus?.execution_roles?.map(role => ({
+                    label: role.name,
+                    value: role.arn
+                  })) || [];
+
+                  // Add current value if it's not in the AWS list (for saved values)
+                  if (systemConfig.execution_role_arn &&
+                    !roleOptions.find(opt => opt.value === systemConfig.execution_role_arn)) {
+                    const roleName = systemConfig.execution_role_arn.split('/').pop() || systemConfig.execution_role_arn;
+                    roleOptions.unshift({
+                      label: `${roleName} (current)`,
+                      value: systemConfig.execution_role_arn
+                    });
+                  }
+
+                  return roleOptions;
+                })()
+              }
+              placeholder={iamLoaded ? "Select execution role" : "Click to load roles"}
+              empty={iamLoading ? "Loading execution roles..." : iamLoaded ? "No execution roles available" : "Click dropdown to load roles"}
+              filteringType="auto"
+            />
+          </FormField>
+        </SpaceBetween>
+      </Container>
+
+      {/* Amazon Bedrock Configuration */}
+      <Container header={<Header variant="h2">Amazon Bedrock Configuration</Header>}>
+        <SpaceBetween size="m">
+          <FormField label="Foundation Model" description="Amazon Bedrock foundation model for Strands automation agents">
+            <Select
+              selectedOption={{
+                label: systemConfig.default_model?.includes('claude-sonnet-4') ? 'Claude Sonnet 4' :
+                  systemConfig.default_model?.includes('claude-3-7-sonnet') ? 'Claude 3.7 Sonnet' :
+                    systemConfig.default_model?.includes('nova-pro') ? 'Amazon Nova Pro' :
+                      systemConfig.default_model?.includes('gpt-oss-120b') ? 'GPT-OSS 120B' :
+                        systemConfig.default_model?.includes('gpt-oss-20b') ? 'GPT-OSS 20B' :
+                          systemConfig.default_model?.includes('deepseek.v3') ? 'DeepSeek V3' :
+                            'Claude Sonnet 4',
+                value: systemConfig.default_model || 'us.anthropic.claude-sonnet-4-20250514-v1:0'
+              }}
+              onChange={({ detail }) =>
+                handleConfigChange('default_model', detail.selectedOption.value)
+              }
+              options={[
+                {
+                  label: 'Claude Sonnet 4',
+                  value: 'us.anthropic.claude-sonnet-4-20250514-v1:0'
+                },
+                {
+                  label: 'Claude 3.7 Sonnet',
+                  value: 'us.anthropic.claude-3-7-sonnet-20250219-v1:0'
+                },
+                {
+                  label: 'Amazon Nova Pro',
+                  value: 'us.amazon.nova-pro-v1:0'
+                },
+                {
+                  label: 'GPT-OSS 120B',
+                  value: 'openai.gpt-oss-120b-1:0'
+                },
+                {
+                  label: 'GPT-OSS 20B',
+                  value: 'openai.gpt-oss-20b-1:0'
+                },
+                {
+                  label: 'DeepSeek V3',
+                  value: 'deepseek.v3-v1:0'
+                }
+              ]}
+            />
+          </FormField>
+
+          <FormField
+            label="Nova Act API Key"
+            description="API key for Nova Act automation service integration"
+            constraintText="UUID format required (e.g., 12345678-1234-1234-1234-123456789abc)"
+          >
+            <Input
+              type={isEditingApiKey || !originalConfig.nova_act_api_key ? "text" : "password"}
+              value={
+                isEditingApiKey
+                  ? systemConfig.nova_act_api_key || ''
+                  : originalConfig.nova_act_api_key && !isEditingApiKey
+                    ? '••••••••••••••••'
+                    : systemConfig.nova_act_api_key || ''
+              }
+              onChange={({ detail }) =>
+                handleConfigChange('nova_act_api_key', detail.value)
+              }
+              onFocus={() => {
+                if (originalConfig.nova_act_api_key && !isEditingApiKey) {
+                  setIsEditingApiKey(true);
+                  // 포커스 시 실제 값으로 변경
+                  setSystemConfig(prev => ({ ...prev, nova_act_api_key: originalConfig.nova_act_api_key }));
+                }
+              }}
+              placeholder={isEditingApiKey || !originalConfig.nova_act_api_key ? "Enter Nova Act API key" : ""}
+              invalid={systemConfig.nova_act_api_key && !validateNovaActApiKey(systemConfig.nova_act_api_key)}
+            />
+          </FormField>
+        </SpaceBetween>
+      </Container>
+
+      {/* Processing & Performance */}
+      <Container header={<Header variant="h2">Processing & Performance</Header>}>
+        <SpaceBetween size="m">
+          <FormField label="Maximum Concurrent Orders" description="Maximum number of orders processed simultaneously">
+            <Select
+              selectedOption={{
+                label: `${systemConfig.max_concurrent_orders || 5} orders`,
+                value: systemConfig.max_concurrent_orders || 5
+              }}
+              onChange={({ detail }) =>
+                handleConfigChange('max_concurrent_orders', parseInt(detail.selectedOption.value))
+              }
+              options={[
+                { label: '1 order', value: 1 },
+                { label: '3 orders', value: 3 },
+                { label: '5 orders', value: 5 },
+                { label: '10 orders', value: 10 },
+                { label: '20 orders', value: 20 }
+              ]}
+            />
+          </FormField>
+
+          <FormField label="Processing Timeout" description="Maximum time allowed for order processing before timeout">
+            <Select
+              selectedOption={{
+                label: `${Math.floor((systemConfig.processing_timeout || 1800) / 60)} minutes`,
+                value: systemConfig.processing_timeout || 1800
+              }}
+              onChange={({ detail }) =>
+                handleConfigChange('processing_timeout', parseInt(detail.selectedOption.value))
+              }
+              options={[
+                { label: '5 minutes', value: 300 },
+                { label: '10 minutes', value: 600 },
+                { label: '15 minutes', value: 900 },
+                { label: '30 minutes', value: 1800 },
+                { label: '60 minutes', value: 3600 }
+              ]}
+            />
+          </FormField>
+
+          <FormField label="Browser Session Timeout" description="Maximum duration for browser sessions before automatic cleanup">
+            <Select
+              selectedOption={{
+                label: `${Math.floor((systemConfig.browser_session_timeout || 3600) / 60)} minutes`,
+                value: systemConfig.browser_session_timeout || 3600
+              }}
+              onChange={({ detail }) =>
+                handleConfigChange('browser_session_timeout', parseInt(detail.selectedOption.value))
+              }
+              options={[
+                { label: '30 minutes', value: 1800 },
+                { label: '60 minutes', value: 3600 },
+                { label: '120 minutes', value: 7200 },
+                { label: '240 minutes', value: 14400 }
+              ]}
+            />
+          </FormField>
+        </SpaceBetween>
+      </Container>
+
+      {/* Amazon S3 Storage */}
+      <Container header={<Header variant="h2">Amazon S3 Storage</Header>}>
+        <SpaceBetween size="m">
+          <FormField label="Session Recordings Bucket" description="S3 bucket for storing browser session recordings and screenshots">
+            <Select
+              selectedOption={
+                systemConfig.session_replay_s3_bucket ? {
+                  label: systemConfig.session_replay_s3_bucket,
+                  value: systemConfig.session_replay_s3_bucket
+                } : null
+              }
+              onChange={({ detail }) =>
+                handleConfigChange('session_replay_s3_bucket', detail.selectedOption.value)
+              }
+              onFocus={loadS3Buckets}
+              options={
+                (() => {
+                  const bucketOptions = awsStatus?.s3_buckets?.map(bucket => ({
+                    label: bucket.name,
+                    value: bucket.name
+                  })) || [];
+
+                  // Add current value if it's not in the AWS list (for saved values)
+                  if (systemConfig.session_replay_s3_bucket &&
+                    !bucketOptions.find(opt => opt.value === systemConfig.session_replay_s3_bucket)) {
+                    bucketOptions.unshift({
+                      label: `${systemConfig.session_replay_s3_bucket} (current)`,
+                      value: systemConfig.session_replay_s3_bucket
+                    });
+                  }
+
+                  return bucketOptions;
+                })()
+              }
+              placeholder={s3Loaded ? "Select S3 bucket" : "Click to load buckets"}
+              empty={s3Loading ? "Loading S3 buckets..." : s3Loaded ? "No S3 buckets available" : "Click dropdown to load buckets"}
+              filteringType="auto"
+            />
+          </FormField>
+
+          <FormField label="S3 Object Prefix" description="S3 prefix for organizing session recordings and maintaining clean bucket structure">
+            <Input
+              value={systemConfig.session_replay_s3_prefix || 'session-replays/'}
+              onChange={({ detail }) =>
+                handleConfigChange('session_replay_s3_prefix', detail.value)
+              }
+              placeholder="session-replays/"
+            />
+          </FormField>
+        </SpaceBetween>
+      </Container>
+
+      {/* Retailer URL Management */}
+      <Table
+          columnDefinitions={[
+            {
+              id: 'retailer',
+              header: 'Retailer',
+              cell: item => item.retailer,
+              sortingField: 'retailer'
+            },
+            {
+              id: 'website_name',
+              header: 'Website Name',
+              cell: item => item.website_name,
+              sortingField: 'website_name'
+            },
+            {
+              id: 'starting_url',
+              header: 'Starting URL',
+              cell: item => (
+                <a href={item.starting_url} target="_blank" rel="noopener noreferrer">
+                  {item.starting_url}
+                </a>
+              )
+            },
+            {
+              id: 'is_default',
+              header: 'Default',
+              cell: item => item.is_default ? '✓ Default' : '',
+              sortingField: 'is_default'
+            },
+            {
+              id: 'actions',
+              header: 'Actions',
+              cell: item => (
+                <SpaceBetween direction="horizontal" size="xs">
+                  <Button size="small" onClick={() => handleEditUrl(item)}>
+                    Edit
+                  </Button>
+                  <Button size="small" onClick={() => handleDeleteUrl(item.id)}>
+                    Delete
+                  </Button>
+                </SpaceBetween>
+              )
+            }
+          ]}
+          items={retailerUrls}
+          loading={urlsLoading}
+          loadingText="Loading retailer URLs..."
+          sortingDisabled={false}
+          empty={
+            <Box textAlign="center" color="inherit">
+              <b>No retailer URLs configured</b>
+              <Box variant="p" color="inherit">
+                Add retailer URLs to configure starting pages for automation.
+              </Box>
+            </Box>
+          }
+          header={
+            <Header
+              variant="h2"
+              counter={`(${retailerUrls.length})`}
+              description="Configure starting URLs for each retailer used by automation agents"
+              actions={
+                <Button variant="primary" iconName="add-plus" onClick={handleAddUrl}>
+                  Add URL
+                </Button>
+              }
+            >
+              Retailer URL Management
+            </Header>
+          }
+        />
+
+      {/* URL Add/Edit Modal */}
       <Modal
-        onDismiss={() => setShowCreateBrowserModal(false)}
-        visible={showCreateBrowserModal}
+        onDismiss={() => setShowUrlModal(false)}
+        visible={showUrlModal}
         closeAriaLabel="Close modal"
+        size="medium"
         footer={
           <Box float="right">
             <SpaceBetween direction="horizontal" size="xs">
-              <Button
-                variant="link"
-                onClick={() => setShowCreateBrowserModal(false)}
+              <Button variant="link" onClick={() => setShowUrlModal(false)}>
+                Cancel
+              </Button>
+              <Button 
+                variant="primary" 
+                onClick={handleSaveUrl}
+                disabled={!urlFormData.retailer || !urlFormData.website_name || !urlFormData.starting_url}
               >
-                Close
+                {editingUrl ? 'Update' : 'Add'} URL
               </Button>
             </SpaceBetween>
           </Box>
         }
-        header="AWS AgentCore Browser Tool"
+        header={editingUrl ? 'Edit Retailer URL' : 'Add Retailer URL'}
       >
-        <SpaceBetween size="l">
-          <Alert type="info">
-            <TextContent>
-              <p><strong>AWS Managed Resource</strong></p>
-              <p>The AgentCore Browser Tool is created and managed by Amazon. It cannot be edited or deleted.</p>
-            </TextContent>
-          </Alert>
-          
-          <Box>
-            <p><strong>Tool Details:</strong></p>
-            <ul>
-              <li><strong>Name:</strong> AgentCore Browser Tool</li>
-              <li><strong>Description:</strong> AWS built-in browser sandbox for secure web browsing</li>
-              <li><strong>Tool ID:</strong> aws.browser.v1</li>
-              <li><strong>ARN:</strong> arn:aws:bedrock-agentcore:{systemConfig.agentcore_region}:aws:browser/aws.browser.v1</li>
-              <li><strong>Status:</strong> Ready</li>
-              <li><strong>Region:</strong> {systemConfig.agentcore_region}</li>
-            </ul>
-          </Box>
-          
-          <Box>
-            <p><strong>Features:</strong></p>
-            <ul>
-              <li>Secure browser sandbox environment</li>
-              <li>Automatic session management</li>
-              <li>WebSocket-based CDP connection</li>
-              <li>Built-in security and isolation</li>
-            </ul>
-          </Box>
+        <SpaceBetween size="m">
+          <FormField label="Retailer" description="Enter the retailer name (e.g., example-store, my-retailer)">
+            <Input
+              value={urlFormData.retailer}
+              onChange={({ detail }) => 
+                setUrlFormData(prev => ({ ...prev, retailer: detail.value }))
+              }
+              placeholder="Enter retailer name"
+            />
+          </FormField>
+
+          <FormField label="Website Name" description="Descriptive name for this URL (e.g., 'Official Store', 'Women's Section')">
+            <Input
+              value={urlFormData.website_name}
+              onChange={({ detail }) => 
+                setUrlFormData(prev => ({ ...prev, website_name: detail.value }))
+              }
+              placeholder="e.g., Official Store, Women's Section"
+            />
+          </FormField>
+
+          <FormField label="Starting URL" description="The URL where automation will begin">
+            <Input
+              value={urlFormData.starting_url}
+              onChange={({ detail }) => 
+                setUrlFormData(prev => ({ ...prev, starting_url: detail.value }))
+              }
+              placeholder="https://www.example.com"
+            />
+          </FormField>
+
+          <FormField label="Default URL" description="Set this as the default starting URL for this retailer">
+            <Toggle
+              onChange={({ detail }) => 
+                setUrlFormData(prev => ({ ...prev, is_default: detail.checked }))
+              }
+              checked={urlFormData.is_default}
+            >
+              Use as default URL for this retailer
+            </Toggle>
+          </FormField>
         </SpaceBetween>
       </Modal>
 
-      {/* Add Retailer Modal */}
-      <Modal
-        onDismiss={() => setShowRetailerModal(false)}
-        visible={showRetailerModal}
-        closeAriaLabel="Close modal"
-        footer={
-          <Box float="right">
-            <SpaceBetween direction="horizontal" size="xs">
-              <Button
-                variant="link"
-                onClick={() => setShowRetailerModal(false)}
-              >
-                Cancel
-              </Button>
-              <Button
-                variant="primary"
-                onClick={addRetailer}
-                disabled={!newRetailer.id || !newRetailer.name || !newRetailer.base_url}
-              >
-                Add Retailer
-              </Button>
-            </SpaceBetween>
-          </Box>
-        }
-        header="Add New Retailer"
-      >
-        <Form>
-          <SpaceBetween size="l">
-            <FormField
-              label="Retailer ID"
-              description="Unique identifier for the retailer (lowercase, no spaces)"
-            >
-              <Input
-                value={newRetailer.id}
-                onChange={({ detail }) =>
-                  setNewRetailer(prev => ({ ...prev, id: detail.value.toLowerCase().replace(/\s+/g, '_') }))
-                }
-                placeholder="e.g., amazon, nike, gucci"
-              />
-            </FormField>
-
-            <FormField
-              label="Retailer Name"
-              description="Display name for the retailer"
-            >
-              <Input
-                value={newRetailer.name}
-                onChange={({ detail }) =>
-                  setNewRetailer(prev => ({ ...prev, name: detail.value }))
-                }
-                placeholder="e.g., Amazon, Nike, Gucci"
-              />
-            </FormField>
-
-            <FormField
-              label="Base URL"
-              description="Main website URL for the retailer"
-            >
-              <Input
-                value={newRetailer.base_url}
-                onChange={({ detail }) =>
-                  setNewRetailer(prev => ({ ...prev, base_url: detail.value }))
-                }
-                placeholder="https://www.example.com"
-                type="url"
-              />
-            </FormField>
-
-            <FormField
-              label="Description"
-              description="Brief description of the retailer"
-            >
-              <Input
-                value={newRetailer.description}
-                onChange={({ detail }) =>
-                  setNewRetailer(prev => ({ ...prev, description: detail.value }))
-                }
-                placeholder="Brief description of the retailer and products"
-              />
-            </FormField>
-          </SpaceBetween>
-        </Form>
-      </Modal>
+      {/* Save Settings - Outside container with right alignment */}
+      <Box float="right">
+        <SpaceBetween direction="horizontal" size="xs">
+          <Button onClick={handleResetToDefaults}>
+            Reset to Defaults
+          </Button>
+          <Button
+            variant="primary"
+            onClick={handleSaveSettings}
+            disabled={!hasChanges}
+          >
+            Save
+          </Button>
+        </SpaceBetween>
+      </Box>
     </SpaceBetween>
   );
 };

@@ -15,7 +15,7 @@ output "private_subnet_ids" {
 
 output "ecr_repository_url" {
   description = "URL of the ECR repository"
-  value       = aws_ecr_repository.timecard_processor.repository_url
+  value       = aws_ecr_repository.order_automation.repository_url
 }
 
 output "alb_dns_name" {

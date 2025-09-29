@@ -9,8 +9,6 @@ import {
   Pagination,
   CollectionPreferences,
   PropertyFilter,
-  ColumnLayout,
-  Container,
   Link
 } from '@cloudscape-design/components';
 
@@ -103,37 +101,7 @@ const FailedOrders = ({ addNotification }) => {
     return filtered.slice(startIndex, endIndex);
   };
 
-  const handleRetryOrder = async (orderId) => {
-    try {
-      const response = await fetch(`/api/orders/${orderId}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          status: 'pending'
-        })
-      });
 
-      if (!response.ok) {
-        throw new Error('Failed to retry order');
-      }
-
-      addNotification({
-        type: 'success',
-        header: 'Order queued for retry',
-        content: `Order ${orderId} has been added back to the processing queue`
-      });
-
-      fetchFailedOrders();
-    } catch (error) {
-      addNotification({
-        type: 'error',
-        header: 'Failed to retry order',
-        content: error.message
-      });
-    }
-  };
 
   const columnDefinitions = [
     {
@@ -146,7 +114,7 @@ const FailedOrders = ({ addNotification }) => {
       id: 'product_name',
       header: 'Product',
       cell: item => (
-        <Link external href={item.product_url}>
+        <Link href={`/orders/${item.id}`}>
           {item.product_name || 'Unknown Product'}
         </Link>
       ),
@@ -188,20 +156,7 @@ const FailedOrders = ({ addNotification }) => {
       cell: item => formatTime(item.created_at),
       sortingField: 'created_at'
     },
-    {
-      id: 'actions',
-      header: 'Actions',
-      cell: item => (
-        <SpaceBetween direction="horizontal" size="xs">
-          <Button
-            size="small"
-            onClick={() => handleRetryOrder(item.id)}
-          >
-            Retry
-          </Button>
-        </SpaceBetween>
-      )
-    }
+
   ];
 
   const propertyFilteringProperties = [
@@ -239,55 +194,28 @@ const FailedOrders = ({ addNotification }) => {
       <Header
         variant="h1"
         description="Orders that failed during automation processing"
-        actions={
-          <SpaceBetween direction="horizontal" size="xs">
-            <Button onClick={fetchFailedOrders} loading={loading}>
-              Refresh
-            </Button>
-          </SpaceBetween>
-        }
-        counter={`(${filteredItems.length})`}
       >
         Failed Orders
       </Header>
 
-      {/* Summary Stats */}
-      {failedOrders.length > 0 && (
-        <Container>
-          <ColumnLayout columns={4} variant="text-grid">
-            <div>
-              <Box variant="awsui-key-label">Total Failed</Box>
-              <Box variant="awsui-value-large">{failedOrders.length}</Box>
-            </div>
-            <div>
-              <Box variant="awsui-key-label">Nova Agent Failures</Box>
-              <Box variant="awsui-value-large">
-                {failedOrders.filter(order => order.automation_method === 'strands_agent').length}
-              </Box>
-            </div>
-            <div>
-              <Box variant="awsui-key-label">Playwright MCP Failures</Box>
-              <Box variant="awsui-value-large">
-                {failedOrders.filter(order => order.automation_method === 'playwright_mcp').length}
-              </Box>
-            </div>
-            <div>
-              <Box variant="awsui-key-label">Most Common Retailer</Box>
-              <Box variant="awsui-value-large">
-                {failedOrders.length > 0 ? 
-                  Object.entries(failedOrders.reduce((acc, order) => {
-                    acc[order.retailer] = (acc[order.retailer] || 0) + 1;
-                    return acc;
-                  }, {})).sort(([,a], [,b]) => b - a)[0]?.[0] || 'N/A'
-                  : 'N/A'
-                }
-              </Box>
-            </div>
-          </ColumnLayout>
-        </Container>
-      )}
+
 
       <Table
+        header={
+          <Header
+            variant="h2"
+            counter={`(${filteredItems.length})`}
+            actions={
+              <SpaceBetween direction="horizontal" size="xs">
+                <Button iconName="refresh" onClick={fetchFailedOrders} loading={loading}>
+                  Refresh
+                </Button>
+              </SpaceBetween>
+            }
+          >
+            Failed Orders
+          </Header>
+        }
         columnDefinitions={columnDefinitions}
         items={paginatedItems}
         loading={loading}
@@ -360,11 +288,13 @@ const FailedOrders = ({ addNotification }) => {
           />
         }
         empty={
-          <Box textAlign="center" color="inherit">
-            <b>No failed orders</b>
-            <Box variant="p" color="inherit">
-              All orders are processing successfully.
-            </Box>
+          <Box margin={{ vertical: 'xs' }} textAlign="center" color="inherit">
+            <SpaceBetween size="m">
+              <b>No failed orders</b>
+              <Box variant="p" color="inherit">
+                All orders are processing successfully.
+              </Box>
+            </SpaceBetween>
           </Box>
         }
       />

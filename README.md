@@ -1,67 +1,111 @@
-# Order Automation System
+# AI-Powered E-commerce Automation Platform
 
-A production-ready e-commerce order automation platform powered by AI agents and intelligent browser automation.
+A modern, scalable platform for automating e-commerce workflows using advanced AI agents and intelligent browser automation.
 
 ## Overview
 
-This system provides enterprise-grade automation for e-commerce order processing using advanced AI agents and browser automation technologies. It supports multiple automation methods, human-in-the-loop workflows, and real-time monitoring.
+This platform demonstrates how AI agents can automate complex e-commerce tasks with human-in-the-loop capabilities. Built with modern web technologies, it showcases intelligent browser automation, real-time monitoring, and enterprise-grade architecture patterns.
 
 ## Key Features
 
 ### AI-Powered Automation
-- **Strands Agents**: Advanced AI agents using the Strands SDK for intelligent decision-making
-- **Playwright MCP**: Structured browser automation with Model Context Protocol integration
-- **Multi-step Reasoning**: Complex order processing with autonomous problem-solving
+- **Multiple AI Agents**: Support for different automation strategies (Strands, Nova Act)
+- **Intelligent Decision Making**: AI agents that can handle complex scenarios
+- **Natural Language Processing**: Human-like interaction with web interfaces
+- **Adaptive Learning**: Agents that improve over time
 
-### Multi-Retailer Support
-- **Gucci**: Premium luxury fashion automation
-- **Valentino**: High-end designer goods processing
-- **Net-A-Porter**: Luxury fashion marketplace
-- **Farfetch**: Global fashion platform
-- **Configurable**: Easy addition of new retailers
+### Multi-Platform Support
+- **Dynamic Configuration**: Easy addition of new e-commerce platforms
+- **Flexible URL Management**: Configure starting points for different sites
+- **Retailer-Agnostic**: Works with any e-commerce website
+- **Scalable Architecture**: Add new platforms without code changes
 
 ### Human-in-the-Loop
-- **CAPTCHA Handling**: Automatic escalation for human intervention
-- **Review Queue**: Manual review for complex scenarios
-- **Error Recovery**: Intelligent fallback and retry mechanisms
-- **Real-time Notifications**: Instant alerts for human attention
+- **Smart Escalation**: Automatic handoff when human intervention needed
+- **Review Dashboard**: Clean interface for manual oversight
+- **Error Recovery**: Intelligent retry and fallback mechanisms
+- **Real-time Alerts**: Instant notifications for attention-required scenarios
 
 ### Production Monitoring
-- **Real-time Dashboard**: Live order tracking and metrics
-- **Queue Management**: Priority-based order processing
-- **Performance Analytics**: Success rates, processing times, and trends
-- **Browser Session Monitoring**: Live thumbnails and session management
+- **Live Dashboard**: Real-time tracking and metrics
+- **Queue Management**: Priority-based processing with pause/resume
+- **Performance Analytics**: Success rates, timing, and trend analysis
+- **Session Monitoring**: Live browser session viewing and control
 
-### Enterprise Configuration
-- **Database Flexibility**: SQLite for local, PostgreSQL/RDS for production
-- **Scalable Architecture**: Microservices-ready design
-- **Security**: Token-based authentication and encrypted data
-- **Observability**: Comprehensive logging and metrics
+### Enterprise Architecture
+- **Database Flexibility**: SQLite for development, PostgreSQL for production
+- **Microservices Ready**: Clean separation of concerns
+- **Security First**: Token-based auth and encrypted data handling
+- **Full Observability**: Comprehensive logging and metrics
 
 ## Architecture
 
+```mermaid
+sequenceDiagram
+    participant U as User Interface
+    participant API as FastAPI Backend
+    participant Q as Order Queue
+    participant A as AI Agent
+    participant B as Browser Session
+    participant E as E-commerce Site
+
+    U->>API: Create Order Request
+    API->>Q: Queue Order for Processing
+    API-->>U: Order Created (WebSocket)
+    
+    Q->>A: Start Order Processing
+    A->>B: Initialize Browser Session
+    B->>E: Navigate to Site
+    
+    loop Order Processing Steps
+        A->>B: Execute Action (click, type, etc.)
+        B->>E: Perform Action
+        E-->>B: Page Response
+        B-->>A: Action Result
+        A-->>API: Progress Update
+        API-->>U: Real-time Update (WebSocket)
+    end
+    
+    alt Success
+        A->>API: Order Completed
+        API->>Q: Mark Order Complete
+        API-->>U: Success Notification
+    else Error/CAPTCHA
+        A->>API: Human Intervention Required
+        API-->>U: Manual Review Required
+        U->>API: Manual Resolution
+        API->>Q: Resume Processing
+    end
 ```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Frontend      │    │   Backend API   │    │   Automation    │
-│   (React +      │◄──►│   (FastAPI)     │◄──►│   Agents        │
-│   Cloudscape)   │    │                 │    │                 │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-         │                       │                       │
-         │                       │                       │
-         ▼                       ▼                       ▼
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   WebSocket     │    │   Database      │    │   Browser       │
-│   Real-time     │    │   (SQLite/RDS)  │    │   Sessions      │
-│   Updates       │    │                 │    │   (Playwright)  │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-```
+
+### System Components
+
+#### Frontend Layer
+- **React Application**: Modern UI with AWS Cloudscape Design System
+- **WebSocket Client**: Real-time updates and live monitoring
+- **Order Management**: Create, track, and manage automation orders
+
+#### Backend Layer
+- **FastAPI Server**: High-performance async API with automatic documentation
+- **Order Queue**: Priority-based processing with concurrent execution
+- **Database Layer**: SQLite for development, PostgreSQL for production
+- **WebSocket Handler**: Real-time communication with frontend
+
+#### Automation Layer
+- **Strands Agent**: LLM-powered browser automation with reasoning capabilities
+- **Nova Act Agent**: Natural language browser automation via AWS AgentCore
+- **Browser Service**: Unified session management and resource optimization
+
+#### External Services
+- **AWS AgentCore**: Secure, scalable browser automation infrastructure
+- **E-commerce Sites**: Target platforms for order automation
 
 ### Core Components
 
 #### Automation Agents
-- **Strands Agent**: Uses Strands SDK for intelligent browser control with LLM reasoning
-- **Playwright MCP Agent**: Structured automation with accessibility-driven interactions
-- **Session Manager**: Browser lifecycle and resource management
+- **Strands Agent**: Uses Strands SDK with browser tools for intelligent browser control with LLM reasoning
+- **Nova Act Agent**: Natural language browser automation with AgentCore integration
+- **Browser Service**: Unified browser session lifecycle and resource management
 
 #### Order Queue System
 - **Priority Processing**: High, normal, low priority queues
@@ -80,100 +124,72 @@ This system provides enterprise-grade automation for e-commerce order processing
 ### Prerequisites
 - Python 3.11+
 - Node.js 18+
-- Docker (optional)
+- AWS Account (for AgentCore Browser)
 
-### Installation
+### Installation & Setup
 
-1. **Clone the repository**
+1. **Clone and Install**
    ```bash
    git clone <repository-url>
-   cd order-automation-system
+   cd ai-ecommerce-automation
+   
+   # Install dependencies
+   cd backend && pip install -r requirements.txt
+   cd ../frontend && npm install
    ```
 
-2. **Backend Setup**
+2. **Configure Environment**
    ```bash
-   cd backend
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   pip install -r requirements.txt
-   ```
-
-3. **Frontend Setup**
-   ```bash
-   cd frontend
-   npm install
-   ```
-
-4. **Environment Configuration**
-   ```bash
-   # Backend environment
+   # Copy environment template
    cp backend/.env.example backend/.env
    
-   # Configure your API keys
-   export ANTHROPIC_API_KEY="your-anthropic-key"
+   # Add your configuration
    export AWS_ACCESS_KEY_ID="your-aws-key"
    export AWS_SECRET_ACCESS_KEY="your-aws-secret"
+   export AWS_DEFAULT_REGION="us-west-2"
    ```
 
-5. **Database Setup**
+3. **Start the Platform**
    ```bash
-   # For local development (SQLite)
-   cd backend
-   python -c "from database import DatabaseManager; DatabaseManager()"
+   # Simple one-command start
+   ./start.sh
    
-   # For production (PostgreSQL)
-   export DATABASE_URL="postgresql://user:pass@localhost/orderdb"
+   # Access the application
+   # Frontend: http://localhost:3000
+   # Backend API: http://localhost:8000
    ```
 
-### Running the Application
-
-#### Development Mode
-```bash
-# Start backend (from backend directory)
-python app.py
-
-# Start frontend (from frontend directory)
-npm start
-```
-
-#### Production Mode
-```bash
-# Using the provided script
-./start.sh
-
-# Or manually
-cd backend && uvicorn app:app --host 0.0.0.0 --port 8000 &
-cd frontend && npm run build && npx serve -s build -l 3000
-```
-
-#### Docker Deployment
-```bash
-docker-compose up -d
-```
+### First Steps
+1. **Configure Settings**: Visit Settings to set up AWS region and models
+2. **Add Platforms**: Add your e-commerce platforms in Retailer URL Management  
+3. **Create Test Order**: Use the Create Order page to test automation
+4. **Monitor Progress**: Watch real-time progress in the Dashboard
 
 ## Configuration
 
-### Retailer Configuration
-Configure supported retailers in `backend/config_manager.py`:
+### Platform Configuration
+Configure supported e-commerce platforms through the web interface:
 
-```python
-SUPPORTED_RETAILERS = {
-    "gucci": {
-        "name": "Gucci",
-        "base_url": "https://www.gucci.com",
-        "automation_methods": ["strands_agent", "playwright_mcp"],
-        "preferred_method": "strands_agent",
-        "selectors": {
-            "size_selector": "[data-testid='size-selector']",
-            "add_to_cart": "[data-testid='add-to-cart-button']"
-        }
-    }
+1. **Settings Dashboard**: Navigate to Settings → Retailer URL Management
+2. **Add New Platform**: Click "Add URL" and configure:
+   - Platform name (e.g., "my-store")
+   - Website display name
+   - Starting URL for automation
+   - Set as default URL (optional)
+
+```javascript
+// Example configuration
+{
+  "retailer": "example-store",
+  "website_name": "Example Store Main",
+  "starting_url": "https://www.example-store.com",
+  "is_default": true
 }
 ```
 
 ### Automation Methods
-- **Strands Agent**: AI-powered with natural language understanding
-- **Playwright MCP**: Structured automation with accessibility focus
+- **Nova Act + AgentCore Browser**: Advanced AI-powered automation (default)
+- **Strands + AgentCore Browser + Browser Tools**: Comprehensive automation with full browser control
 
 ### Queue Settings
 ```python
@@ -357,23 +373,50 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - Use headless mode for better performance
 - Configure appropriate timeouts
 
-## Roadmap
+## Technology Stack
 
-### Upcoming Features
-- [ ] Multi-language support
-- [ ] Advanced analytics dashboard
-- [ ] Mobile app for monitoring
-- [ ] Webhook integrations
-- [ ] Advanced retry strategies
-- [ ] Machine learning optimization
+### Frontend
+- **React 18** with modern hooks and context
+- **AWS Cloudscape Design System** for enterprise UI
+- **WebSocket** for real-time updates
+- **Responsive Design** for all devices
 
-### Long-term Goals
-- [ ] Multi-tenant architecture
-- [ ] Global deployment support
-- [ ] Advanced AI agent capabilities
-- [ ] Integration marketplace
-- [ ] Enterprise SSO support
+### Backend  
+- **FastAPI** for high-performance async API
+- **SQLAlchemy** with SQLite/PostgreSQL support
+- **WebSocket** for real-time communication
+- **Structured Logging** for observability
+
+### AI & Automation
+- **AWS Bedrock** for foundation models (Claude, Nova)
+- **AgentCore Browser** for secure browser automation
+- **Strands SDK** for intelligent browser tools
+- **Nova Act** for natural language automation
+
+## Use Cases
+
+This platform demonstrates several key automation patterns:
+
+- **E-commerce Workflow Automation**: End-to-end order processing
+- **AI Agent Orchestration**: Multiple agents working together
+- **Human-AI Collaboration**: Seamless handoff between AI and humans
+- **Real-time Monitoring**: Live tracking of automated processes
+- **Error Recovery**: Intelligent handling of edge cases
+
+## Performance & Scalability
+
+- **Concurrent Processing**: Handle multiple orders simultaneously
+- **Queue Management**: Priority-based processing with smart scheduling
+- **Resource Optimization**: Efficient browser session management
+- **Monitoring**: Real-time metrics and performance tracking
+
+## Security & Compliance
+
+- **Data Protection**: Tokenized sensitive information
+- **Secure Communication**: HTTPS and WSS protocols
+- **Access Control**: Role-based permissions
+- **Audit Logging**: Complete activity tracking
 
 ---
 
-**Built with modern web technologies and AI-powered automation.**
+**A modern demonstration of AI-powered automation with enterprise-grade architecture.**

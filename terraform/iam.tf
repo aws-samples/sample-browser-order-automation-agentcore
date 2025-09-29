@@ -74,12 +74,29 @@ resource "aws_iam_role_policy" "ecs_task" {
           "s3:GetObject",
           "s3:PutObject",
           "s3:DeleteObject",
-          "s3:ListBucket"
+          "s3:ListBucket",
+          "s3:ListAllMyBuckets",
+          "s3:GetBucketLocation"
         ]
         Resource = [
           aws_s3_bucket.app_data.arn,
-          "${aws_s3_bucket.app_data.arn}/*"
+          "${aws_s3_bucket.app_data.arn}/*",
+          aws_s3_bucket.static_assets.arn,
+          "${aws_s3_bucket.static_assets.arn}/*",
+          "*"
         ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "iam:AssumeRole",
+          "iam:GetRole",
+          "iam:ListRoles",
+          "iam:ListRolePolicies",
+          "iam:GetRolePolicy",
+          "sts:AssumeRole"
+        ]
+        Resource = "*"
       },
       {
         Effect = "Allow"

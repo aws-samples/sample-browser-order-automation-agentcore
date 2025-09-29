@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Container,
@@ -10,23 +10,23 @@ import {
   Select,
   Textarea,
   ColumnLayout,
-  Alert,
   Box,
-  ExpandableSection,
-  Link
+  ExpandableSection
 } from '@cloudscape-design/components';
 import ModelSelector from '../components/ModelSelector';
 
 const CreateOrder = ({ addNotification }) => {
   const navigate = useNavigate();
-  const [retailers, setRetailers] = useState({});
   const [loading, setLoading] = useState(false);
+  const [retailerUrls, setRetailerUrls] = useState([]);
+  const [loadingRetailers, setLoadingRetailers] = useState(true);
+  const [secrets, setSecrets] = useState([]);
   const [formData, setFormData] = useState({
     // Required fields - minimal for demo
-    retailer: 'gucci', // Default to Gucci
-    product_url: 'https://www.gucci.com', // Default to Gucci base URL
+    retailer: '', // User will type retailer name
+    product_url: '', // No default URL
     product_name: '',
-    
+
     // Optional fields - demo mode
     customer_name: 'Demo Customer',
     customer_email: 'demo@example.com',
@@ -37,45 +37,100 @@ const CreateOrder = ({ addNotification }) => {
     shipping_state: 'CA',
     shipping_postal_code: '12345',
     shipping_country: 'US',
-    
+
     // Agent will figure these out
     product_size: '',
     product_color: '',
     product_quantity: 1,
     product_price: '',
     shipping_address_2: '',
-    automation_method: 'strands_browser', // Default to Strands + Browser Tools + AgentCore Browser
-    ai_model: 'us.anthropic.claude-sonnet-4-20250514-v1:0',
-    
+    automation_method: 'nova_act', // Default to Nova Act + AgentCore Browser
+    ai_model: 'nova_act',
+
     // Instructions for agent (optional)
     instructions: ''
   });
 
-  useEffect(() => {
-    fetchRetailers();
-  }, []);
-
-  const fetchRetailers = async () => {
+  const fetchRetailerUrls = useCallback(async () => {
     try {
-      const response = await fetch('/api/config/retailers');
+      setLoadingRetailers(true);
+      const response = await fetch('/api/config/retailer-urls');
       if (response.ok) {
         const data = await response.json();
-        setRetailers(data);
+        setRetailerUrls(data.retailer_urls || []);
       }
     } catch (error) {
-      console.error('Failed to fetch retailers:', error);
+      console.error('Failed to fetch retailer URLs:', error);
+      addNotification({
+        type: 'error',
+        header: 'Failed to load retailers',
+        content: error.message
+      });
+    } finally {
+      setLoadingRetailers(false);
     }
-  };
+  }, [addNotification]);
+
+  const fetchSecrets = useCallback(async () => {
+    try {
+      const response = await fetch('/api/secrets');
+      if (response.ok) {
+        const data = await response.json();
+        setSecrets(data.secrets || []);
+      } else {
+        console.warn('Failed to fetch secrets, using empty array');
+        setSecrets([]);
+      }
+    } catch (error) {
+      console.error('Failed to fetch secrets:', error);
+      setSecrets([]); // Set empty array on error
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchRetailerUrls();
+    fetchSecrets();
+  }, [fetchRetailerUrls, fetchSecrets]);
 
   const handleInputChange = (field, value) => {
-    setFormData(prev => ({
-      ...prev,
-      [field]: value
-    }));
+    setFormData(prev => {
+      const newData = {
+        ...prev,
+        [field]: value
+      };
+
+      // When automation method changes to nova_act, set AI model to Nova Act
+      if (field === 'automation_method' && value === 'nova_act') {
+        newData.ai_model = 'nova_act';
+      }
+      // When automation method changes from nova_act to strands, reset to default model
+      else if (field === 'automation_method' && value === 'strands' && prev.automation_method === 'nova_act') {
+        newData.ai_model = 'us.anthropic.claude-sonnet-4-20250514-v1:0';
+      }
+
+      return newData;
+    });
   };
 
   const validateForm = () => {
     return formData.retailer && formData.product_name;
+  };
+
+  const hasCredentialsForRetailer = (retailerName) => {
+    if (!retailerName || !secrets.length) return false;
+    
+    // Check for exact name match
+    const exactMatch = secrets.find(secret => 
+      secret.site_name.toLowerCase() === retailerName.toLowerCase()
+    );
+    if (exactMatch) return true;
+    
+    // Check for partial name match
+    const partialMatch = secrets.find(secret => 
+      secret.site_name.toLowerCase().includes(retailerName.toLowerCase()) ||
+      retailerName.toLowerCase().includes(secret.site_name.toLowerCase())
+    );
+    return !!partialMatch;
   };
 
   const handleSubmit = async () => {
@@ -140,24 +195,33 @@ const CreateOrder = ({ addNotification }) => {
     }
   };
 
-  const retailerOptions = Object.entries(retailers.retailer_configs || {}).map(([key, retailer]) => ({
-    label: retailer.name || key,
-    value: key
-  }));
+  // Get unique retailers for dropdown
+  const getRetailerOptions = () => {
+    const uniqueRetailers = {};
+    retailerUrls.forEach(url => {
+      if (!uniqueRetailers[url.retailer]) {
+        uniqueRetailers[url.retailer] = {
+          label: url.retailer.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
+          value: url.retailer
+        };
+      }
+    });
+    return Object.values(uniqueRetailers);
+  };
 
-  // Get selected retailer's base URL for placeholder
-  const selectedRetailerConfig = retailers.retailer_configs?.[formData.retailer];
-  const retailerBaseUrl = selectedRetailerConfig?.base_url || 'https://www.gucci.com';
+  // Get default URL for selected retailer
+  const getDefaultUrlForRetailer = (retailer) => {
+    const defaultUrl = retailerUrls.find(url => url.retailer === retailer && url.is_default);
+    return defaultUrl ? defaultUrl.starting_url : '';
+  };
 
-  // Update product URL when retailer changes
+  // Handle retailer change
   const handleRetailerChange = (retailer) => {
-    const newRetailerConfig = retailers.retailer_configs?.[retailer];
-    const newBaseUrl = newRetailerConfig?.base_url || 'https://www.gucci.com';
-    
     handleInputChange('retailer', retailer);
-    // Only update URL if it's still the base URL (not a specific product URL)
-    if (formData.product_url === retailerBaseUrl || !formData.product_url) {
-      handleInputChange('product_url', newBaseUrl);
+    // Always update product URL with default URL for selected retailer
+    const defaultUrl = getDefaultUrlForRetailer(retailer);
+    if (defaultUrl) {
+      handleInputChange('product_url', defaultUrl);
     }
   };
 
@@ -184,8 +248,8 @@ const CreateOrder = ({ addNotification }) => {
         <SpaceBetween size="l">
           <ColumnLayout columns={3}>
             <div style={{ gridColumn: 'span 2' }}>
-              <FormField 
-                label="Product name" 
+              <FormField
+                label="Product name"
                 constraintText="Product name must be 1 to 255 characters. Valid characters are a-z, A-Z, 0-9, hyphens (-), and underscores (_)."
               >
                 <Input
@@ -196,41 +260,43 @@ const CreateOrder = ({ addNotification }) => {
               </FormField>
             </div>
             <FormField label="Retailer">
-              <Select
-                selectedOption={retailerOptions.find(opt => opt.value === formData.retailer) || null}
-                onChange={({ detail }) => handleRetailerChange(detail.selectedOption.value)}
-                options={retailerOptions}
-                placeholder="Select retailer"
-              />
+              <SpaceBetween size="xs">
+                <Select
+                  selectedOption={getRetailerOptions().find(opt => opt.value === formData.retailer) || null}
+                  onChange={({ detail }) => handleRetailerChange(detail.selectedOption.value)}
+                  options={getRetailerOptions()}
+                  placeholder={loadingRetailers ? "Loading retailers..." : "Select retailer"}
+                  disabled={loadingRetailers}
+                  empty={loadingRetailers ? "Loading..." : "No retailers configured. Add retailers in Settings."}
+                />
+                {formData.retailer && hasCredentialsForRetailer(formData.retailer) && (
+                  <Box color="text-status-success" fontSize="body-s">
+                    ✓ Login credentials available in Secret Vault
+                  </Box>
+                )}
+                {formData.retailer && !hasCredentialsForRetailer(formData.retailer) && (
+                  <Box color="text-status-warning" fontSize="body-s">
+                    ⚠ No login credentials found. Add credentials in Secret Vault if login is required.
+                  </Box>
+                )}
+              </SpaceBetween>
             </FormField>
           </ColumnLayout>
 
           <FormField label="Automation method" description="All methods use AgentCore Browser for secure, scalable automation">
             <Select
               selectedOption={
-                formData.automation_method === 'strands_browser' 
-                  ? { label: 'Strands + Browser Tools + AgentCore Browser', value: 'strands_browser' }
-                  : formData.automation_method === 'nova_act'
+                formData.automation_method === 'nova_act'
                   ? { label: 'Nova Act + AgentCore Browser', value: 'nova_act' }
-                  : { label: 'Strands + Playwright MCP + AgentCore Browser', value: 'strands_playwright_mcp' }
+                  : { label: 'Strands + AgentCore Browser + Browser Tools', value: 'strands' }
               }
               onChange={({ detail }) => handleInputChange('automation_method', detail.selectedOption.value)}
               options={[
-                { label: 'Strands + Browser Tools + AgentCore Browser', value: 'strands_browser' },
-                { label: 'Strands + Playwright MCP + AgentCore Browser', value: 'strands_playwright_mcp' },
-                { label: 'Nova Act + AgentCore Browser', value: 'nova_act' }
+                { label: 'Nova Act + AgentCore Browser', value: 'nova_act' },
+                { label: 'Strands + AgentCore Browser + Browser Tools', value: 'strands' }
               ]}
             />
           </FormField>
-
-          {(formData.automation_method === 'strands_browser' || formData.automation_method === 'strands_playwright_mcp') && (
-            <ModelSelector
-              selectedModel={formData.ai_model}
-              onChange={(model) => handleInputChange('ai_model', model)}
-              label="AI Model"
-              description="Bedrock model used with Strands and AgentCore Browser for web automation"
-            />
-          )}
 
           {formData.automation_method === 'nova_act' && (
             <ModelSelector
@@ -241,25 +307,29 @@ const CreateOrder = ({ addNotification }) => {
               disabled={true}
             />
           )}
+
+          {formData.automation_method === 'strands' && (
+            <ModelSelector
+              selectedModel={formData.ai_model}
+              onChange={(model) => handleInputChange('ai_model', model)}
+              label="AI Model"
+              description="Bedrock model used with Strands and AgentCore Browser for web automation"
+            />
+          )}
         </SpaceBetween>
       </Container>
 
-      <ExpandableSection headerText="Product details - optional" variant="container">
+      <ExpandableSection headerText="Product details - optional" variant="container" defaultExpanded={true}>
         <SpaceBetween size="l">
-          <Alert type="info">
-            <Box>
-              <strong>AI-powered detection:</strong> Leave size and color empty for automatic detection by the AI agent.
-            </Box>
-          </Alert>
 
           <FormField label="Product URL (starting URL)" constraintText="Optional - helps agent locate the product">
             <Input
               value={formData.product_url}
               onChange={({ detail }) => handleInputChange('product_url', detail.value)}
-              placeholder={retailerBaseUrl}
+              placeholder="https://www.example.com/product"
             />
           </FormField>
-          
+
           <ColumnLayout columns={3}>
             <FormField label="Size" constraintText="Leave empty for auto-detection">
               <Input
@@ -291,14 +361,9 @@ const CreateOrder = ({ addNotification }) => {
 
       <ExpandableSection headerText="Instructions - optional" variant="container">
         <SpaceBetween size="l">
-          <Alert type="info">
-            <Box>
-              <strong>Agent guidance:</strong> Provide specific instructions to help the AI agent make the right choices during automation.
-            </Box>
-          </Alert>
 
-          <FormField 
-            label="Special instructions" 
+          <FormField
+            label="Special instructions"
             description="Tell the agent any specific requirements or preferences"
           >
             <Textarea
@@ -316,8 +381,8 @@ const CreateOrder = ({ addNotification }) => {
           <Button onClick={() => navigate('/dashboard')}>
             Cancel
           </Button>
-          <Button 
-            variant="primary" 
+          <Button
+            variant="primary"
             onClick={handleSubmit}
             loading={loading}
             disabled={!validateForm()}

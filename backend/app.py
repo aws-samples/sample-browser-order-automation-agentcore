@@ -36,9 +36,10 @@ from database import (
     OrderPriority,
     AutomationMethod,
 )
-from config_manager import ConfigManager
+from config import get_config_manager
 from order_queue import OrderQueue, initialize_order_queue
-from agentcore_manager import agentcore_manager
+from services.browser_service import BrowserService
+from services.settings_service import SettingsService
 
 # Configure logging
 logging.basicConfig(
@@ -49,7 +50,19 @@ logger = logging.getLogger(__name__)
 # Global instances
 db_manager = None
 order_queue = None
-config_manager = None
+# config_manager = None  # Replaced by SettingsService
+
+
+def get_settings_service():
+    """Get SettingsService instance"""
+    return SettingsService(db_manager)
+
+
+def get_browser_service_with_config():
+    """Get BrowserService with current system config"""
+    settings_service = get_settings_service()
+    config = settings_service.get_system_config()
+    return BrowserService(config, db_manager)
 
 
 # WebSocket connection manager
@@ -68,11 +81,17 @@ class ConnectionManager:
         await websocket.send_text(message)
 
     async def broadcast(self, message: str):
+        dead_connections = []
         for connection in self.active_connections:
             try:
                 await connection.send_text(message)
             except:
-                # Remove dead connections
+                # Mark dead connections for removal
+                dead_connections.append(connection)
+
+        # Remove dead connections safely
+        for connection in dead_connections:
+            if connection in self.active_connections:
                 self.active_connections.remove(connection)
 
 
@@ -123,9 +142,7 @@ class UpdateOrderRequest(BaseModel):
     human_review_notes: Optional[str] = None
 
 
-class SystemConfigRequest(BaseModel):
-    config_key: str
-    config_value: Any
+# Removed - using dict instead for flexibility
 
 
 # Application lifecycle
@@ -139,14 +156,12 @@ async def lifespan(app: FastAPI):
         db_manager = DatabaseManager()
         logger.info("Database initialized")
 
-        # Initialize config manager with database connection
-        global config_manager
-        config_manager = ConfigManager(db_manager=db_manager)
-        logger.info("Configuration manager initialized")
+        # Configuration manager replaced by SettingsService (stateless)
+        logger.info("Using stateless SettingsService for configuration")
 
         # Initialize order queue
         global order_queue
-        order_queue = initialize_order_queue(db_manager, config_manager)
+        order_queue = initialize_order_queue(db_manager)
         await order_queue.start()
         logger.info("Order queue started")
 
@@ -160,6 +175,19 @@ async def lifespan(app: FastAPI):
         if order_queue:
             await order_queue.stop()
             logger.info("Order queue stopped")
+
+        # Only cleanup truly expired sessions, preserve active ones for stateless operation
+        from services.browser_service import get_browser_service
+
+        try:
+            browser_service = get_browser_service()
+            # Only cleanup sessions that haven't been accessed for a long time
+            browser_service.cleanup_expired_sessions()
+            logger.info(
+                "Browser service expired sessions cleaned up, active sessions preserved"
+            )
+        except Exception as e:
+            logger.error(f"Error cleaning up browser service: {e}")
 
 
 # Create FastAPI app
@@ -180,9 +208,11 @@ app.add_middleware(
 )
 
 # Mount static files for screenshots
-screenshots_dir = os.path.join(os.path.dirname(__file__), 'static', 'screenshots')
+screenshots_dir = os.path.join(os.path.dirname(__file__), "static", "screenshots")
 os.makedirs(screenshots_dir, exist_ok=True)
-app.mount("/api/screenshots", StaticFiles(directory=screenshots_dir), name="screenshots")
+app.mount(
+    "/api/screenshots", StaticFiles(directory=screenshots_dir), name="screenshots"
+)
 
 
 # Removed duplicate live-view endpoint - using the one below that properly handles order status
@@ -209,9 +239,8 @@ async def favicon():
     return Response(status_code=204)
 
 
-@app.get("/health")
-async def health_check():
-    """Health check endpoint"""
+async def _health_check_logic():
+    """Shared health check logic"""
     try:
         # Check database connection
         stats = db_manager.get_order_stats()
@@ -219,16 +248,41 @@ async def health_check():
         # Check queue status
         queue_metrics = await order_queue.get_queue_metrics()
 
+        # Check config manager
+        config_manager = get_config_manager(db_manager)
+        config_status = "loaded"
+        try:
+            system_config = config_manager.get_system_config()
+            config_keys = list(system_config.keys())
+        except Exception as e:
+            config_status = f"error: {str(e)}"
+            config_keys = []
+
         return {
             "status": "healthy",
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "database": "connected",
             "queue_status": queue_metrics.queue_status.value,
             "total_orders": stats.get("total_orders", 0),
+            "config_manager": {
+                "status": config_status,
+                "config_keys": config_keys,
+                "db_integration": db_manager is not None,
+            },
         }
     except Exception as e:
         logger.error(f"Health check failed: {e}")
         raise HTTPException(status_code=503, detail="Service unavailable")
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    return await _health_check_logic()
+
+@app.get("/api/health")
+async def api_health_check():
+    """API health check endpoint"""
+    return await _health_check_logic()
 
 
 # Order Management
@@ -236,19 +290,21 @@ async def health_check():
 async def create_order(request: CreateOrderRequest, background_tasks: BackgroundTasks):
     """Create a new order"""
     try:
-        # Validate retailer and automation method
-        if not config_manager.is_retailer_supported(request.retailer):
-            raise HTTPException(
-                status_code=400, detail=f"Retailer {request.retailer} is not supported"
-            )
+        logger.info(
+            f"Received order creation request: retailer={request.retailer}, automation_method={request.automation_method}"
+        )
 
-        if not config_manager.validate_order_config(
-            request.retailer, request.automation_method
-        ):
+        # Validate retailer and automation method
+        settings_service = SettingsService(db_manager)
+        retailer_urls = settings_service.get_retailer_urls(request.retailer)
+        if not retailer_urls:
             raise HTTPException(
                 status_code=400,
-                detail=f"Invalid configuration for {request.retailer} with {request.automation_method}",
+                detail=f"Retailer {request.retailer} is not configured. Please add retailer URLs in Settings.",
             )
+
+        # Basic validation: if retailer URLs exist, configuration is valid
+        # All automation methods (nova_act, strands) are supported for all retailers
 
         # Convert priority
         try:
@@ -334,13 +390,13 @@ async def get_order(order_id: str):
             raise HTTPException(status_code=404, detail="Order not found")
 
         order_dict = order.to_dict()
-        
+
         # Add formatted error information for failed orders
         if order.status == OrderStatus.FAILED and order.error_message:
             order_dict["error_details"] = {
                 "message": order.error_message,
                 "timestamp": order.updated_at.isoformat() if order.updated_at else None,
-                "step": order.current_step or "Unknown step"
+                "step": order.current_step or "Unknown step",
             }
 
         return order_dict
@@ -401,58 +457,78 @@ async def get_order_live_view(order_id: str):
         order = db_manager.get_order(order_id)
         if not order:
             raise HTTPException(status_code=404, detail="Order not found")
-        
+
         # Return order info even if not processing - let frontend handle gracefully
         response_data = {
             "order_id": order_id,
             "status": order.status.value,
-            "automation_method": order.automation_method.value if order.automation_method else None,
+            "automation_method": (
+                order.automation_method.value if order.automation_method else None
+            ),
             "live_view_url": None,
             "live_view_available": False,
-            "message": None
+            "message": None,
         }
-        
+
         # Only try to get live view if order is processing
         if order.status == OrderStatus.PROCESSING:
             try:
                 # Get the active agent from the queue
                 active_agent = await order_queue.get_active_agent(order_id)
-                if active_agent and hasattr(active_agent, 'get_live_view_url'):
+                if active_agent and hasattr(active_agent, "get_live_view_url"):
                     try:
                         live_view_info = active_agent.get_live_view_url()
-                        if live_view_info and isinstance(live_view_info, dict) and live_view_info.get("url"):
-                            response_data.update({
-                                "live_view_url": live_view_info["url"],
-                                "live_view_session_id": live_view_info.get("session_id", order_id),
-                                "live_view_type": live_view_info.get("type", "dcv"),
-                                "live_view_headers": live_view_info.get("headers"),
-                                "live_view_available": True,
-                                "message": "Live view is available"
-                            })
+                        if (
+                            live_view_info
+                            and isinstance(live_view_info, dict)
+                            and live_view_info.get("url")
+                        ):
+                            response_data.update(
+                                {
+                                    "live_view_url": live_view_info["url"],
+                                    "live_view_session_id": live_view_info.get(
+                                        "session_id", order_id
+                                    ),
+                                    "live_view_type": live_view_info.get("type", "dcv"),
+                                    "live_view_headers": live_view_info.get("headers"),
+                                    "live_view_available": True,
+                                    "message": "Live view is available",
+                                }
+                            )
                         elif isinstance(live_view_info, str):
                             # Backward compatibility for string URLs
-                            response_data.update({
-                                "live_view_url": live_view_info,
-                                "live_view_session_id": order_id,
-                                "live_view_type": "dcv",
-                                "live_view_available": True,
-                                "message": "Live view is available"
-                            })
+                            response_data.update(
+                                {
+                                    "live_view_url": live_view_info,
+                                    "live_view_session_id": order_id,
+                                    "live_view_type": "dcv",
+                                    "live_view_available": True,
+                                    "message": "Live view is available",
+                                }
+                            )
                         else:
-                            response_data["message"] = "Live view not supported by this automation method"
+                            response_data["message"] = (
+                                "Live view not supported by this automation method"
+                            )
                     except Exception as url_error:
-                        logger.warning(f"Failed to get live view URL for order {order_id}: {url_error}")
+                        logger.warning(
+                            f"Failed to get live view URL for order {order_id}: {url_error}"
+                        )
                         response_data["message"] = "Live view temporarily unavailable"
                 else:
                     response_data["message"] = "No active agent found for this order"
             except Exception as agent_error:
-                logger.warning(f"Failed to get active agent for order {order_id}: {agent_error}")
+                logger.warning(
+                    f"Failed to get active agent for order {order_id}: {agent_error}"
+                )
                 response_data["message"] = "Agent information temporarily unavailable"
         else:
-            response_data["message"] = f"Live view only available for processing orders. Current status: {order.status.value}"
-        
+            response_data["message"] = (
+                f"Live view only available for processing orders. Current status: {order.status.value}"
+            )
+
         return response_data
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -463,7 +539,7 @@ async def get_order_live_view(order_id: str):
             "status": "error",
             "live_view_url": None,
             "live_view_available": False,
-            "message": f"Error retrieving live view: {str(e)}"
+            "message": f"Error retrieving live view: {str(e)}",
         }
 
 
@@ -475,15 +551,16 @@ async def get_active_agents():
         for order_id, agent in order_queue.active_agents.items():
             active_agents[order_id] = {
                 "type": type(agent).__name__,
-                "has_get_presigned_url": hasattr(agent, 'get_presigned_url'),
-                "session_id": getattr(agent, 'session_id', None)
+                "has_get_presigned_url": hasattr(agent, "get_presigned_url"),
+                "session_id": getattr(agent, "session_id", None),
             }
         return {
             "active_agents": active_agents,
-            "processing_orders": list(order_queue.processing_orders.keys())
+            "processing_orders": list(order_queue.processing_orders.keys()),
         }
     except Exception as e:
         return {"error": str(e)}
+
 
 @app.get("/api/orders/{order_id}/presigned-url")
 async def get_presigned_url(order_id: str):
@@ -492,57 +569,244 @@ async def get_presigned_url(order_id: str):
         order = db_manager.get_order(order_id)
         if not order:
             raise HTTPException(status_code=404, detail="Order not found")
-        
-        # Use LiveViewService for presigned URL generation
+
+        # Get live view URL directly from agent
         try:
-            from services.live_view_service import get_live_view_service
-            
-            # Get automation config for LiveViewService
-            config = config_manager.get_automation_config(order.automation_method.value)
+            from services.browser_service import get_browser_service
+
+            # Get automation config for BrowserService
+            settings_service = SettingsService(db_manager)
+            config = settings_service.get_automation_config(
+                order.automation_method.value
+            )
             if not config:
-                raise HTTPException(status_code=500, detail="Automation configuration not found")
-            
-            # Get or create live view service
-            live_view_service = get_live_view_service(config, db_manager)
-            
-            # Try to get existing session or create new one
-            live_session_id = live_view_service.get_session_for_order(order_id)
-            if not live_session_id:
-                logger.info(f"Creating new live view session for order {order_id}")
-                live_session_id = live_view_service.create_live_session(
-                    order_id, 
-                    order.automation_method.value
+                raise HTTPException(
+                    status_code=500, detail="Automation configuration not found"
                 )
-            
-            if not live_session_id:
-                raise HTTPException(status_code=503, detail="Failed to create live view session")
-            
-            # Get presigned URL
-            presigned_url = live_view_service.get_presigned_url(live_session_id, expires=300)
-            
-            if not presigned_url:
-                raise HTTPException(status_code=503, detail="Failed to generate presigned URL")
-            
+
+            # Get browser service
+            browser_service = get_browser_service(config, db_manager)
+
+            # Get live view URL directly from browser service
+            live_view_info = browser_service.get_live_view_url(order_id, expires=300)
+
+            if not live_view_info.get("url"):
+                raise HTTPException(
+                    status_code=503,
+                    detail=live_view_info.get("error", "Failed to get live view URL"),
+                )
+
             return {
                 "order_id": order_id,
-                "sessionId": live_session_id,
-                "presignedUrl": presigned_url,
-                "authToken": live_session_id,
-                "expires": 300
+                "sessionId": order_id,
+                "presignedUrl": live_view_info["url"],
+                "authToken": order_id,
+                "expires": 300,
             }
-            
+
         except HTTPException:
             raise
         except Exception as service_error:
             logger.error(f"LiveViewService error for order {order_id}: {service_error}")
-            raise HTTPException(status_code=500, detail=f"Live view service error: {str(service_error)}")
+            raise HTTPException(
+                status_code=500, detail=f"Live view service error: {str(service_error)}"
+            )
         else:
-            raise HTTPException(status_code=400, detail=f"Presigned URL only available for processing orders. Current status: {order.status.value}")
-        
+            raise HTTPException(
+                status_code=400,
+                detail=f"Presigned URL only available for processing orders. Current status: {order.status.value}",
+            )
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Failed to get presigned URL for order {order_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
+@app.post("/api/orders/{order_id}/resume-nova-act")
+async def resume_nova_act_after_captcha(order_id: str):
+    """Resume Nova Act execution after CAPTCHA has been resolved manually"""
+    try:
+        order = db_manager.get_order(order_id)
+        if not order:
+            raise HTTPException(status_code=404, detail="Order not found")
+
+        # Only available for Nova Act orders that require human intervention
+        if order.automation_method != AutomationMethod.NOVA_ACT:
+            raise HTTPException(
+                status_code=400, 
+                detail="Nova Act resume only available for Nova Act orders"
+            )
+
+        if order.status != OrderStatus.REQUIRES_HUMAN:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Order must be in 'requires_human' status to resume. Current status: {order.status.value}"
+            )
+
+        # Get the active agent from the queue
+        active_agent = await order_queue.get_active_agent(order_id)
+        if not active_agent or not hasattr(active_agent, "resume_after_captcha"):
+            raise HTTPException(
+                status_code=400, 
+                detail="Nova Act agent not available or does not support resume functionality"
+            )
+
+        # Update order status to processing
+        db_manager.update_order_status(order_id, OrderStatus.PROCESSING)
+        
+        # Broadcast status update
+        await broadcast_update({
+            "type": "order_updated",
+            "order": db_manager.get_order(order_id).to_dict()
+        })
+
+        # Resume Nova Act execution
+        try:
+            result = await active_agent.resume_after_captcha(order)
+            
+            # Update order based on result
+            if result.get("success"):
+                db_manager.update_order_status(order_id, OrderStatus.COMPLETED)
+                if result.get("confirmation_number"):
+                    db_manager.update_order(order_id, {"confirmation_number": result["confirmation_number"]})
+            elif result.get("status") == "requires_human":
+                db_manager.update_order_status(order_id, OrderStatus.REQUIRES_HUMAN)
+            else:
+                db_manager.update_order_status(order_id, OrderStatus.FAILED)
+                if result.get("error"):
+                    db_manager.update_order(order_id, {"error": result["error"]})
+
+            # Broadcast final update
+            await broadcast_update({
+                "type": "order_updated",
+                "order": db_manager.get_order(order_id).to_dict()
+            })
+
+            return {
+                "success": result.get("success", False),
+                "status": result.get("status", "failed"),
+                "message": result.get("result") or result.get("message") or result.get("error"),
+                "order_id": order_id
+            }
+
+        except Exception as resume_error:
+            logger.error(f"Failed to resume Nova Act for order {order_id}: {resume_error}")
+            
+            # Update order status back to requires_human
+            db_manager.update_order_status(order_id, OrderStatus.REQUIRES_HUMAN)
+            db_manager.update_order(order_id, {"error": f"Resume failed: {str(resume_error)}"})
+            
+            await broadcast_update({
+                "type": "order_updated",
+                "order": db_manager.get_order(order_id).to_dict()
+            })
+            
+            raise HTTPException(status_code=500, detail=f"Failed to resume Nova Act: {str(resume_error)}")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to resume Nova Act for order {order_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Secret Vault API Endpoints
+@app.get("/api/secrets")
+async def get_secrets():
+    """Get all secret vault entries (passwords masked)"""
+    try:
+        # Check if database is properly initialized
+        if not hasattr(db_manager, 'get_secrets'):
+            logger.error("Database manager does not have get_secrets method")
+            return {"secrets": []}
+        
+        secrets = db_manager.get_secrets(include_passwords=False)
+        return {"secrets": [secret.to_dict(include_password=False) for secret in secrets]}
+    except Exception as e:
+        logger.error(f"Failed to get secrets: {e}")
+        # Return empty list instead of error to prevent frontend infinite loading
+        return {"secrets": []}
+
+
+@app.post("/api/secrets")
+async def create_secret(secret_data: dict):
+    """Create a new secret vault entry"""
+    try:
+        required_fields = ["site_name", "site_url"]
+        for field in required_fields:
+            if field not in secret_data:
+                raise HTTPException(status_code=400, detail=f"Missing required field: {field}")
+        
+        secret_id = db_manager.create_secret(
+            site_name=secret_data["site_name"],
+            site_url=secret_data["site_url"],
+            username=secret_data.get("username"),
+            password=secret_data.get("password"),
+            additional_fields=secret_data.get("additional_fields", {})
+        )
+        
+        return {"success": True, "secret_id": secret_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to create secret: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/secrets/{secret_id}")
+async def get_secret(secret_id: str, include_password: bool = False):
+    """Get a specific secret vault entry"""
+    try:
+        secret = db_manager.get_secret(secret_id, include_password=include_password)
+        if not secret:
+            raise HTTPException(status_code=404, detail="Secret not found")
+        
+        return secret.to_dict(include_password=include_password)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get secret {secret_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/secrets/{secret_id}")
+async def update_secret(secret_id: str, secret_data: dict):
+    """Update a secret vault entry"""
+    try:
+        success = db_manager.update_secret(
+            secret_id=secret_id,
+            site_name=secret_data.get("site_name"),
+            site_url=secret_data.get("site_url"),
+            username=secret_data.get("username"),
+            password=secret_data.get("password"),
+            additional_fields=secret_data.get("additional_fields")
+        )
+        
+        if not success:
+            raise HTTPException(status_code=404, detail="Secret not found")
+        
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update secret {secret_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/secrets/{secret_id}")
+async def delete_secret(secret_id: str):
+    """Delete a secret vault entry"""
+    try:
+        success = db_manager.delete_secret(secret_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Secret not found")
+        
+        return {"success": True}
+    except Exception as e:
+        logger.error(f"Failed to delete secret {secret_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -551,20 +815,24 @@ async def list_live_sessions():
     """List all active live view sessions"""
     try:
         from services.live_view_service import get_live_view_service
-        
+
         # Get default config for service access
-        config = config_manager.get_automation_config("strands_playwright_mcp")
+        config = get_settings_service().get_automation_config("strands")
         if not config:
             raise HTTPException(status_code=500, detail="Configuration not available")
-        
-        live_view_service = get_live_view_service(config, db_manager)
-        sessions = live_view_service.list_active_sessions()
-        
-        return {
-            "sessions": sessions,
-            "count": len(sessions)
-        }
-        
+
+        # Get active sessions from browser service
+        from services.browser_service import get_browser_service
+
+        config = get_settings_service().get_automation_config("strands")
+        if not config:
+            raise HTTPException(status_code=500, detail="Configuration not available")
+
+        browser_service = get_browser_service(config, db_manager)
+        sessions = browser_service.list_sessions()
+
+        return {"sessions": sessions, "count": len(sessions)}
+
     except Exception as e:
         logger.error(f"Failed to list live sessions: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -575,36 +843,38 @@ async def force_disconnect_live_session(order_id: str):
     """Force disconnect existing live view session for an order"""
     try:
         from services.live_view_service import get_live_view_service
-        
+
         # Get default config for service access
-        config = config_manager.get_automation_config("strands_playwright_mcp")
+        config = get_settings_service().get_automation_config("strands")
         if not config:
             raise HTTPException(status_code=500, detail="Configuration not available")
-        
-        live_view_service = get_live_view_service(config, db_manager)
-        
-        # Find existing session for this order
-        existing_session_id = live_view_service.get_session_for_order(order_id)
-        
-        if existing_session_id:
-            # Terminate the existing session
-            success = live_view_service.terminate_session(existing_session_id)
-            if success:
-                logger.info(f"Force disconnected live session {existing_session_id} for order {order_id}")
-                return {
-                    "success": True,
-                    "message": f"Disconnected existing session {existing_session_id}",
-                    "session_id": existing_session_id
-                }
-            else:
-                raise HTTPException(status_code=500, detail="Failed to terminate existing session")
+
+        # Force disconnect by cleaning up the agent
+        from order_queue import get_order_queue
+
+        order_queue = get_order_queue()
+        agent = order_queue.active_agents.get(order_id)
+
+        # Just remove agent from active list, but keep browser session for resume
+        if agent:
+            if order_id in order_queue.active_agents:
+                del order_queue.active_agents[order_id]
+
+            logger.info(
+                f"Disconnected agent for order {order_id}, browser session preserved"
+            )
+            return {
+                "success": True,
+                "message": f"Disconnected agent for order {order_id}, session preserved for resume",
+                "session_id": order_id,
+            }
         else:
             return {
                 "success": True,
-                "message": "No active session found to disconnect",
-                "session_id": None
+                "message": "No active agent session found to disconnect",
+                "session_id": None,
             }
-            
+
     except HTTPException:
         raise
     except Exception as e:
@@ -617,44 +887,44 @@ async def change_browser_resolution(order_id: str, request: dict):
     """Change browser resolution for live view session"""
     try:
         from services.live_view_service import get_live_view_service
-        from services.config_manager import config_manager
-        
+
         # Validate request
         if "width" not in request or "height" not in request:
             raise HTTPException(status_code=400, detail="Width and height are required")
-        
+
         width = int(request["width"])
         height = int(request["height"])
-        
+
         # Validate resolution values
         if width < 640 or width > 3840 or height < 480 or height > 2160:
-            raise HTTPException(status_code=400, detail="Invalid resolution. Width: 640-3840, Height: 480-2160")
-        
-        config = config_manager.get_automation_config("strands_playwright_mcp")
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid resolution. Width: 640-3840, Height: 480-2160",
+            )
+
+        config = get_settings_service().get_automation_config("strands")
         if not config:
             raise HTTPException(status_code=500, detail="Configuration not available")
-        
-        live_view_service = get_live_view_service(config, db_manager)
-        
-        # Find existing session for this order
-        session_id = live_view_service.get_session_for_order(order_id)
-        
-        if not session_id:
-            raise HTTPException(status_code=404, detail="No active live view session found for this order")
-        
-        # Change browser resolution
-        result = live_view_service.change_browser_resolution(session_id, width, height)
-        
+
+        browser_service = get_browser_service(config, db_manager)
+
+        # Change resolution via browser service
+        result = browser_service.change_browser_resolution(order_id, width, height)
+
         if result["success"]:
-            logger.info(f"Changed browser resolution to {width}x{height} for order {order_id}")
+            logger.info(
+                f"Changed browser resolution to {width}x{height} for order {order_id}"
+            )
             return result
         else:
             raise HTTPException(status_code=500, detail=result["error"])
-            
+
     except HTTPException:
         raise
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=f"Invalid width or height: {str(e)}")
+        raise HTTPException(
+            status_code=400, detail=f"Invalid width or height: {str(e)}"
+        )
     except Exception as e:
         logger.error(f"Failed to change browser resolution for order {order_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -664,34 +934,120 @@ async def change_browser_resolution(order_id: str, request: dict):
 async def focus_active_tab(order_id: str):
     """Focus on the active tab for live view session"""
     try:
-        from services.live_view_service import get_live_view_service
-        from services.config_manager import config_manager
-        
-        config = config_manager.get_automation_config("strands_playwright_mcp")
-        if not config:
-            raise HTTPException(status_code=500, detail="Configuration not available")
-        
-        live_view_service = get_live_view_service(config, db_manager)
-        
-        # Find existing session for this order
-        session_id = live_view_service.get_session_for_order(order_id)
-        
-        if not session_id:
-            raise HTTPException(status_code=404, detail="No active live view session found for this order")
-        
-        # Focus active tab
-        result = live_view_service.focus_active_tab(session_id)
-        
-        if result["success"]:
-            logger.info(f"Focused active tab for order {order_id}")
-            return result
-        else:
-            raise HTTPException(status_code=500, detail=result["error"])
-            
+        from order_queue import get_order_queue
+
+        order_queue = get_order_queue()
+        agent = order_queue.active_agents.get(order_id)
+
+        if not agent:
+            raise HTTPException(
+                status_code=404, detail="No active agent found for this order"
+            )
+
+        # For now, just return success as focus is handled automatically
+        logger.info(f"Focus request received for order {order_id}")
+        return {
+            "success": True,
+            "message": f"Focus request processed for order {order_id}",
+        }
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Failed to focus active tab for order {order_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/orders/{order_id}/take-control")
+async def take_manual_control(order_id: str):
+    """Enable manual control for browser session"""
+    try:
+        from services.browser_service import get_browser_service
+
+        # Get browser service
+        browser_service = get_browser_service()
+        if not browser_service:
+            raise HTTPException(status_code=500, detail="Browser service not available")
+
+        # Enable manual control
+        result = browser_service.enable_manual_control(order_id)
+
+        if result["success"]:
+            logger.info(f"Manual control enabled for order {order_id}")
+            return result
+        else:
+            raise HTTPException(status_code=500, detail=result["error"])
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to enable manual control for order {order_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/orders/{order_id}/release-control")
+async def release_manual_control(order_id: str):
+    """Disable manual control and return to automation"""
+    try:
+        from services.live_view_service import get_live_view_service
+        from services.browser_service import get_browser_service
+
+        config = get_settings_service().get_automation_config("strands")
+        if not config:
+            raise HTTPException(status_code=500, detail="Configuration not available")
+
+        # First disable manual control via browser service
+        browser_service = get_browser_service()
+        if browser_service:
+            control_result = browser_service.disable_manual_control(order_id)
+            if not control_result["success"]:
+                raise HTTPException(status_code=400, detail=control_result["error"])
+
+        # Update order status to processing
+        order = db_manager.get_order(order_id)
+        if order:
+            db_manager.update_order_status(order_id, "processing")
+            logger.info(f"Order {order_id} status updated to processing")
+
+            # Resume automation by restarting the agent
+            try:
+                from agents.strands_agent import StrandsAgent
+
+                # Create new agent instance to continue automation
+                agent = StrandsAgent(
+                    config=app_config,
+                    retailer_config=retailer_config,
+                    db_manager=db_manager,
+                    browser_service=browser_service,
+                )
+
+                # Resume automation in background
+                import asyncio
+
+                asyncio.create_task(agent.resume_automation(order.product_name))
+
+                logger.info(f"Automation resumed for order {order_id}")
+                return {
+                    "success": True,
+                    "message": "Manual control released and automation resumed",
+                    "order_id": order_id,
+                }
+
+            except Exception as e:
+                logger.error(f"Failed to resume automation for order {order_id}: {e}")
+                return {
+                    "success": True,
+                    "message": "Manual control released but automation could not be resumed",
+                    "order_id": order_id,
+                    "warning": str(e),
+                }
+        else:
+            raise HTTPException(status_code=404, detail="Order not found")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to release manual control for order {order_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -700,20 +1056,26 @@ async def get_live_session_status(session_id: str):
     """Get status of a specific live view session"""
     try:
         from services.live_view_service import get_live_view_service
-        
+
         # Get default config for service access
-        config = config_manager.get_automation_config("strands_playwright_mcp")
+        config = get_settings_service().get_automation_config("strands")
         if not config:
             raise HTTPException(status_code=500, detail="Configuration not available")
-        
-        live_view_service = get_live_view_service(config, db_manager)
-        status = live_view_service.get_session_status(session_id)
-        
-        if not status.get("exists"):
+
+        # Get session status from agent
+        from order_queue import get_order_queue
+
+        order_queue = get_order_queue()
+        agent = order_queue.active_agents.get(session_id)
+
+        if not agent:
             raise HTTPException(status_code=404, detail="Live view session not found")
-        
-        return status
-        
+
+        if hasattr(agent, "get_session_status"):
+            return agent.get_session_status()
+        else:
+            return {"exists": True, "status": "active", "session_id": session_id}
+
     except HTTPException:
         raise
     except Exception as e:
@@ -726,20 +1088,29 @@ async def terminate_live_session(session_id: str):
     """Terminate a live view session"""
     try:
         from services.live_view_service import get_live_view_service
-        
+
         # Get default config for service access
-        config = config_manager.get_automation_config("strands_playwright_mcp")
+        config = get_settings_service().get_automation_config("strands")
         if not config:
             raise HTTPException(status_code=500, detail="Configuration not available")
-        
-        live_view_service = get_live_view_service(config, db_manager)
-        success = live_view_service.terminate_session(session_id)
-        
-        if not success:
+
+        # Terminate session via agent cleanup
+        from order_queue import get_order_queue
+
+        order_queue = get_order_queue()
+        agent = order_queue.active_agents.get(session_id)
+
+        if not agent:
             raise HTTPException(status_code=404, detail="Live view session not found")
-        
-        return {"message": f"Live view session {session_id} terminated successfully"}
-        
+
+        # Just remove agent from active list, preserve browser session
+        if session_id in order_queue.active_agents:
+            del order_queue.active_agents[session_id]
+
+        return {
+            "message": f"Live view session {session_id} disconnected, browser session preserved"
+        }
+
     except HTTPException:
         raise
     except Exception as e:
@@ -754,25 +1125,24 @@ async def get_session_replay(order_id: str):
         order = db_manager.get_order(order_id)
         if not order:
             raise HTTPException(status_code=404, detail="Order not found")
-        
+
         # Get session replay info from database
         replay_info = db_manager.get_session_replay_info(order_id)
-        
+
         if not replay_info.get("enabled") or not replay_info.get("s3_bucket"):
             raise HTTPException(
-                status_code=404, 
-                detail="Session replay not available for this order"
+                status_code=404, detail="Session replay not available for this order"
             )
-        
+
         return {
             "order_id": order_id,
             "session_id": replay_info.get("session_id"),
             "s3_bucket": replay_info.get("s3_bucket"),
             "s3_prefix": replay_info.get("s3_prefix"),
             "replay_available": True,
-            "automation_method": order.automation_method
+            "automation_method": order.automation_method,
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -787,32 +1157,32 @@ async def get_session_replay_status(order_id: str):
         order = db_manager.get_order(order_id)
         if not order:
             raise HTTPException(status_code=404, detail="Order not found")
-        
+
         # Get session replay info from database
         replay_info = db_manager.get_session_replay_info(order_id)
-        
+
         if not replay_info.get("enabled"):
             return {
                 "order_id": order_id,
                 "replay_available": False,
                 "reason": "Session replay was not enabled for this order",
-                "automation_method": order.automation_method
+                "automation_method": order.automation_method,
             }
-        
+
         # Check if S3 data exists (this would require AWS SDK in a real implementation)
         # For now, we'll assume it exists if the database has the info
         s3_bucket = replay_info.get("s3_bucket")
         s3_prefix = replay_info.get("s3_prefix")
         session_id = replay_info.get("session_id")
-        
+
         if not s3_bucket or not s3_prefix:
             return {
                 "order_id": order_id,
                 "replay_available": False,
                 "reason": "Session replay S3 configuration is incomplete",
-                "automation_method": order.automation_method
+                "automation_method": order.automation_method,
             }
-        
+
         return {
             "order_id": order_id,
             "session_id": session_id,
@@ -823,11 +1193,11 @@ async def get_session_replay_status(order_id: str):
             "cli_commands": {
                 "view_specific": f"python view_recordings.py --bucket {s3_bucket} --prefix {s3_prefix} --session {session_id}",
                 "view_latest": f"python view_recordings.py --bucket {s3_bucket} --prefix {s3_prefix}",
-                "interactive": "python -m live_view_sessionreplay.browser_interactive_session"
+                "interactive": "python -m live_view_sessionreplay.browser_interactive_session",
             },
-            "documentation_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/agentcore-browser-observability.html"
+            "documentation_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/agentcore-browser-observability.html",
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -888,6 +1258,66 @@ async def cancel_order(order_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.delete("/api/orders/{order_id}/force")
+async def force_delete_order(order_id: str):
+    """Force delete an order regardless of status"""
+    try:
+        # Get order first to check if it exists
+        order = db_manager.get_order(order_id)
+        if not order:
+            raise HTTPException(status_code=404, detail="Order not found")
+
+        # Force stop any running automation
+        if order_id in order_queue.processing_orders:
+            try:
+                task = order_queue.processing_orders[order_id]
+                if not task.done():
+                    task.cancel()
+                    logger.info(f"Cancelled running task for order {order_id}")
+            except Exception as e:
+                logger.warning(f"Failed to cancel task for order {order_id}: {e}")
+
+        # Clean up browser session if exists
+        try:
+            from services.browser_service import get_browser_service
+
+            config = get_settings_service().get_automation_config("strands")
+            if config:
+                browser_service = get_browser_service(config, db_manager)
+                browser_service.cleanup_session(order_id, force=True)
+                logger.info(f"Cleaned up browser session for order {order_id}")
+        except Exception as e:
+            logger.warning(
+                f"Failed to cleanup browser session for order {order_id}: {e}"
+            )
+
+        # Remove from processing orders
+        if order_id in order_queue.processing_orders:
+            del order_queue.processing_orders[order_id]
+
+        # Remove from active agents
+        if order_id in order_queue.active_agents:
+            del order_queue.active_agents[order_id]
+
+        # Delete from database
+        success = db_manager.delete_order(order_id)
+        if not success:
+            raise HTTPException(
+                status_code=500, detail="Failed to delete order from database"
+            )
+
+        # Broadcast deletion
+        await broadcast_update({"type": "order_deleted", "order_id": order_id})
+
+        return {"message": f"Order {order_id} force deleted successfully"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to force delete order {order_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.delete("/api/orders/cleanup/completed")
 async def delete_completed_orders():
     """Delete all completed and failed orders"""
@@ -934,7 +1364,7 @@ async def upload_orders_csv(
                     ).strip(),
                     "retailer": row.get("retailer", "farfetch").strip(),
                     "automation_method": row.get(
-                        "automation_method", "strands_browser"
+                        "automation_method", "strands"
                     ).strip(),
                     "ai_model": row.get(
                         "ai_model", "us.anthropic.claude-sonnet-4-20250514-v1:0"
@@ -1138,150 +1568,124 @@ async def get_performance_metrics():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# AgentCore Browser Management
-@app.get("/api/agentcore/browsers")
-async def get_browsers(region: str = "us-west-2"):
-    """Get all AgentCore Browsers"""
-    try:
-        browsers = await agentcore_manager.get_browsers(region)
-        return {"browsers": browsers}
-
-    except Exception as e:
-        logger.error(f"Failed to get browsers: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/agentcore/browsers")
-async def create_browser(request: dict):
-    """Create a new AgentCore Browser"""
-    try:
-        region = request.get("region", "us-west-2")
-        name = request.get("name")
-        description = request.get("description")
-        recording_enabled = request.get("recording_enabled", True)
-        s3_bucket = request.get("s3_bucket", "sanghwa-oregon")
-        s3_prefix = request.get("s3_prefix", "videos/")
-
-        browser = await agentcore_manager.create_browser(
-            region=region,
-            name=name,
-            description=description,
-            recording_enabled=recording_enabled,
-            s3_bucket=s3_bucket,
-            s3_prefix=s3_prefix,
-        )
-
-        return browser
-
-    except Exception as e:
-        logger.error(f"Failed to create browser: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/api/agentcore/browsers/{browser_id}")
-async def get_browser(browser_id: str):
-    """Get specific browser details"""
-    try:
-        browser = await agentcore_manager.get_browser(browser_id)
-
-        if not browser:
-            raise HTTPException(status_code=404, detail="Browser not found")
-
-        return browser
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to get browser: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.delete("/api/agentcore/browsers/{browser_id}")
-async def delete_browser(browser_id: str):
-    """Delete an AgentCore Browser"""
-    try:
-        success = await agentcore_manager.delete_browser(browser_id)
-
-        if not success:
-            raise HTTPException(status_code=404, detail="Browser not found")
-
-        return {"message": f"Browser {browser_id} deleted successfully"}
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to delete browser: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/api/agentcore/browsers/{browser_id}/sessions")
-async def get_browser_sessions(browser_id: str):
-    """Get sessions for an AgentCore Browser"""
-    try:
-        sessions = await agentcore_manager.get_browser_sessions(browser_id)
-        return {"sessions": sessions}
-
-    except Exception as e:
-        logger.error(f"Failed to get browser sessions: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/agentcore/browsers/{browser_id}/sessions")
-async def create_browser_session(browser_id: str):
-    """Create a new session for an AgentCore Browser"""
-    try:
-        session = await agentcore_manager.create_session(browser_id)
-
-        return session
-
-    except Exception as e:
-        logger.error(f"Failed to create browser session: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.delete("/api/agentcore/sessions/{session_id}")
-async def delete_browser_session(session_id: str):
-    """Delete a browser session"""
-    try:
-        success = await agentcore_manager.delete_session(session_id)
-
-        if not success:
-            raise HTTPException(status_code=404, detail="Browser session not found")
-
-        return {"message": f"Browser session {session_id} deleted successfully"}
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to delete browser session: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+# Note: AgentCore Browser Management APIs removed
+# Using default aws.browser.v1 - no manual browser management needed
 
 
 # Configuration Management
 @app.get("/api/config/retailers")
 async def get_retailers():
-    """Get supported retailers"""
+    """Get supported retailers from database"""
     try:
-        retailers = config_manager.get_supported_retailers()
-        retailer_configs = {}
+        # Get retailer URLs from database
+        retailer_urls = db_manager.get_retailer_urls()
 
-        for retailer in retailers:
-            config = config_manager.get_retailer_config(retailer)
-            if config:
-                retailer_configs[retailer] = {
-                    "name": config.get("name"),
-                    "base_url": config.get("base_url"),
-                    "automation_methods": config.get("automation_methods", []),
-                    "preferred_method": config.get("preferred_method"),
-                    "status": config.get("status", "active"),
-                    "priority": config.get("priority", 999),
-                    "requires_account": config.get("requires_account", False),
-                }
+        # Transform to expected format - group by retailer
+        formatted_configs = {}
+        supported_retailers = []
 
-        return {"supported_retailers": retailers, "retailer_configs": retailer_configs}
+        # Group URLs by retailer
+        retailer_groups = {}
+        for url in retailer_urls:
+            retailer = url["retailer"]
+            if retailer not in retailer_groups:
+                retailer_groups[retailer] = []
+            retailer_groups[retailer].append(url)
+
+        # Create formatted configs
+        for retailer, urls in retailer_groups.items():
+            # Find default URL
+            default_url = next(
+                (url for url in urls if url["is_default"]), urls[0] if urls else None
+            )
+
+            formatted_configs[retailer] = {
+                "name": retailer.replace("_", " ").title(),
+                "base_url": default_url["starting_url"] if default_url else "",
+                "automation_methods": ["strands", "nova_act"],
+                "preferred_method": "strands",
+                "status": "active",
+                "priority": 999,
+                "requires_account": False,
+            }
+            supported_retailers.append(retailer)
+
+        return {
+            "supported_retailers": supported_retailers,
+            "retailer_configs": formatted_configs,
+        }
 
     except Exception as e:
         logger.error(f"Failed to get retailers: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/config/retailer-urls")
+async def get_retailer_urls(retailer: Optional[str] = None):
+    """Get retailer URL mappings"""
+    try:
+        urls = db_manager.get_retailer_urls(retailer)
+        return {"retailer_urls": urls}
+    except Exception as e:
+        logger.error(f"Failed to get retailer URLs: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/config/retailer-urls")
+async def add_retailer_url(request: dict):
+    """Add a new retailer URL mapping"""
+    try:
+        required_fields = ["retailer", "website_name", "starting_url"]
+        for field in required_fields:
+            if field not in request:
+                raise HTTPException(
+                    status_code=400, detail=f"Missing required field: {field}"
+                )
+
+        url_id = db_manager.add_retailer_url(
+            retailer=request["retailer"],
+            website_name=request["website_name"],
+            starting_url=request["starting_url"],
+            is_default=request.get("is_default", False),
+        )
+
+        return {"status": "success", "url_id": url_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to add retailer URL: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/config/retailer-urls/{url_id}")
+async def update_retailer_url(url_id: str, request: dict):
+    """Update a retailer URL mapping"""
+    try:
+        success = db_manager.update_retailer_url(url_id, **request)
+        if not success:
+            raise HTTPException(status_code=404, detail="Retailer URL not found")
+
+        return {"status": "success"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update retailer URL: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/config/retailer-urls/{url_id}")
+async def delete_retailer_url(url_id: str):
+    """Delete a retailer URL mapping"""
+    try:
+        success = db_manager.delete_retailer_url(url_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Retailer URL not found")
+
+        return {"status": "success"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete retailer URL: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1292,19 +1696,14 @@ async def get_automation_methods():
         return {
             "automation_methods": [
                 {
-                    "id": "strands_browser",
-                    "name": "Strands + Browser Tools + AgentCore Browser",
-                    "description": "Reliable automation using Strands agent with browser tools and AgentCore Browser",
+                    "id": "strands",
+                    "name": "Strands + AgentCore Browser + Browser Tools",
+                    "description": "Unified Strands automation with comprehensive browser capabilities, screenshots, session replay, and manual control",
                 },
                 {
                     "id": "nova_act",
                     "name": "Nova Act + AgentCore Browser",
                     "description": "Advanced AI-powered automation using Nova Act with AgentCore Browser",
-                },
-                {
-                    "id": "strands_playwright_mcp",
-                    "name": "Strands + Playwright MCP + AgentCore Browser",
-                    "description": "Structured browser automation with Strands, Playwright MCP, and AgentCore Browser",
                 },
             ]
         }
@@ -1314,32 +1713,10 @@ async def get_automation_methods():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/config/system")
-async def get_system_config():
-    """Get system configuration"""
-    try:
-        return config_manager.get_all_configs()
-
-    except Exception as e:
-        logger.error(f"Failed to get system config: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+# Removed duplicate - using /api/settings/config instead
 
 
-@app.put("/api/config/system")
-async def update_system_config(request: SystemConfigRequest):
-    """Update system configuration"""
-    try:
-        config_manager.update_system_config(request.config_key, request.config_value)
-
-        # If queue settings were updated, reload them
-        if request.config_key == "queue_settings":
-            await order_queue.update_settings(request.config_value)
-
-        return {"message": "Configuration updated successfully"}
-
-    except Exception as e:
-        logger.error(f"Failed to update system config: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+# Removed duplicate - using /api/settings/config instead
 
 
 # Session Management
@@ -1443,7 +1820,7 @@ async def resolve_review(order_id: str, request: UpdateOrderRequest):
 
 # Test endpoints for demo
 @app.post("/api/test/sample-order")
-async def create_sample_order(automation_method: str = "strands_browser"):
+async def create_sample_order(automation_method: str = "strands"):
     """Create a sample order for testing"""
     try:
         # Sample order data
@@ -1519,7 +1896,7 @@ async def compare_automation_methods():
         # Create sample orders with both methods
         results = []
 
-        for method in ["strands_browser", "strands_playwright_mcp", "nova_act"]:
+        for method in ["strands", "nova_act"]:
             try:
                 order_id = await order_queue.add_order(
                     retailer="farfetch",
@@ -1593,3 +1970,175 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True, log_level="info")
+
+
+# Settings and Configuration endpoints
+@app.get("/api/settings/aws/status")
+async def get_aws_status():
+    """Get current AWS configuration status"""
+    try:
+        settings_service = SettingsService(db_manager)
+        config = settings_service.get_aws_status()
+        return config
+    except Exception as e:
+        logger.error(f"Failed to get AWS status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/settings/aws/search-iam-roles")
+async def search_iam_roles(q: str = ""):
+    """Search IAM execution roles"""
+    try:
+        settings_service = SettingsService(db_manager)
+        roles = settings_service.search_execution_roles(q)
+        return {"execution_roles": roles}
+    except Exception as e:
+        logger.error(f"Failed to search IAM roles: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/settings/aws/search-s3-buckets")
+async def search_s3_buckets(q: str = ""):
+    """Search S3 buckets"""
+    try:
+        settings_service = SettingsService(db_manager)
+        buckets = settings_service.search_s3_buckets(q)
+        return {"s3_buckets": buckets}
+    except Exception as e:
+        logger.error(f"Failed to search S3 buckets: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/settings/aws/setup")
+async def setup_aws_environment(request: dict):
+    """Set up complete AWS environment for AgentCore"""
+    try:
+        settings_service = SettingsService(db_manager)
+
+        role_name = request.get("role_name", "AgentCoreExecutionRole")
+        bucket_name = request.get("bucket_name")
+
+        result = settings_service.setup_complete_environment(role_name, bucket_name)
+
+        # Update config if successful
+        if result["overall_status"] in ["success", "partial"]:
+            updates = {}
+            if (
+                result.get("execution_role")
+                and result["execution_role"]["status"] == "success"
+            ):
+                updates["recording_role_arn"] = result["execution_role"]["role_arn"]
+
+            if result.get("s3_bucket") and result["s3_bucket"]["status"] == "success":
+                updates["session_replay_s3_bucket"] = result["s3_bucket"]["bucket_name"]
+
+            if updates:
+                settings_service.update_system_config(updates)
+
+        return result
+    except Exception as e:
+        logger.error(f"Failed to setup AWS environment: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/settings/aws/create-role")
+async def create_execution_role(request: dict):
+    """Create IAM execution role for AgentCore"""
+    try:
+        settings_service = SettingsService(db_manager)
+        role_name = request.get("role_name", "AgentCoreExecutionRole")
+
+        result = settings_service.create_execution_role(role_name)
+
+        # Update config if successful
+        if result["status"] == "success":
+            settings_service.update_system_config(
+                {"recording_role_arn": result["role_arn"]}
+            )
+
+        return result
+    except Exception as e:
+        logger.error(f"Failed to create execution role: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/settings/aws/create-bucket")
+async def create_s3_bucket(request: dict):
+    """Create S3 bucket for session recordings"""
+    try:
+        settings_service = SettingsService(db_manager)
+        bucket_name = request["bucket_name"]
+
+        result = settings_service.create_s3_bucket(bucket_name)
+
+        # Update config if successful
+        if result["status"] == "success":
+            settings_service.update_system_config(
+                {"session_replay_s3_bucket": result["bucket_name"]}
+            )
+
+        return result
+    except Exception as e:
+        logger.error(f"Failed to create S3 bucket: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/settings/config")
+async def get_settings_config():
+    """Get current system configuration"""
+    try:
+        settings_service = SettingsService(db_manager)
+        config = settings_service.get_system_config()
+        # Remove sensitive information for API response
+        safe_config = {
+            k: v
+            for k, v in config.items()
+            if not k.lower().endswith("_key") or k == "nova_act_api_key"
+        }
+        return {"config": safe_config}
+    except Exception as e:
+        logger.error(f"Failed to get system config: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/settings/config")
+async def update_settings_config(request: dict):
+    """Update system configuration"""
+    try:
+        settings_service = SettingsService(db_manager)
+
+        # Handle both single key-value updates and bulk config updates
+        if "key" in request and "value" in request:
+            # Single key-value update
+            config_updates = {request["key"]: request["value"]}
+        else:
+            # Bulk config update
+            config_updates = request.get("config", {})
+
+        if not config_updates:
+            return {"status": "warning", "message": "No configuration updates provided"}
+
+        result = settings_service.update_system_config(config_updates)
+        return result
+
+    except Exception as e:
+        logger.error(f"Failed to update system config: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/settings/config")
+async def save_settings_config(request: dict):
+    """Save complete system configuration"""
+    try:
+        settings_service = SettingsService(db_manager)
+        config_updates = request.get("config", {})
+
+        if not config_updates:
+            return {"status": "warning", "message": "No configuration provided"}
+
+        result = settings_service.update_system_config(config_updates)
+        return result
+
+    except Exception as e:
+        logger.error(f"Failed to save system config: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

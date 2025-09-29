@@ -19,12 +19,20 @@ const ModelSelector = ({ selectedModel, onChange, label = "AI Model", descriptio
       name: 'Amazon Nova Pro'
     },
     {
+      id: 'openai.gpt-oss-120b-1:0',
+      name: 'GPT-OSS 120B'
+    },
+    {
       id: 'openai.gpt-oss-20b-1:0',
       name: 'GPT-OSS 20B'
     },
     {
-      id: 'openai.gpt-oss-120b-1:0',
-      name: 'GPT-OSS 120B'
+      id: 'deepseek.v3-v1:0',
+      name: 'DeepSeek V3'
+    },
+    {
+      id: 'nova_act',
+      name: 'Nova Act'
     }
   ];
 

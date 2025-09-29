@@ -38,7 +38,7 @@ class APIService {
     return this.request(`/api/orders/${orderId}`);
   }
 
-  async createOrder(orderData, automationMethod = 'strands_browser') {
+  async createOrder(orderData, automationMethod = 'strands') {
     return this.request('/api/orders', {
       method: 'POST',
       body: JSON.stringify(orderData),
@@ -52,7 +52,7 @@ class APIService {
     });
   }
 
-  async createSampleOrder(automationMethod = 'strands_browser') {
+  async createSampleOrder(automationMethod = 'strands') {
     return this.request(`/api/test/sample-order?automation_method=${automationMethod}`, {
       method: 'POST'
     });
@@ -62,6 +62,46 @@ class APIService {
     return this.request('/api/automation/compare', {
       method: 'POST',
       body: JSON.stringify(orderData)
+    });
+  }
+
+  // Live View and Control
+  async getLiveViewUrl(orderId) {
+    return this.request(`/api/orders/${orderId}/live-view`);
+  }
+
+  async getPresignedUrl(orderId) {
+    return this.request(`/api/orders/${orderId}/presigned-url`);
+  }
+
+  async changeBrowserResolution(orderId, width, height) {
+    return this.request(`/api/orders/${orderId}/change-resolution`, {
+      method: 'POST',
+      body: JSON.stringify({ width, height })
+    });
+  }
+
+  async takeManualControl(orderId) {
+    return this.request(`/api/orders/${orderId}/take-control`, {
+      method: 'POST'
+    });
+  }
+
+  async releaseManualControl(orderId) {
+    return this.request(`/api/orders/${orderId}/release-control`, {
+      method: 'POST'
+    });
+  }
+
+  async focusActiveTab(orderId) {
+    return this.request(`/api/orders/${orderId}/focus-tab`, {
+      method: 'POST'
+    });
+  }
+
+  async forceDisconnectSession(orderId) {
+    return this.request(`/api/orders/${orderId}/force-disconnect`, {
+      method: 'POST'
     });
   }
 
@@ -86,6 +126,10 @@ class APIService {
   // Health Check
   async healthCheck() {
     return this.request('/health');
+  }
+
+  async apiHealthCheck() {
+    return this.request('/api/health');
   }
 }
 

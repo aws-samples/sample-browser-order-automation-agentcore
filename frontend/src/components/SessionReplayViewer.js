@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Container,
   Header,
@@ -15,9 +15,9 @@ const SessionReplayViewer = ({ order, isVisible, onClose }) => {
   const [replayInfo, setReplayInfo] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [isFullscreen, setIsFullscreen] = useState(false);
 
-  const fetchReplayInfo = async () => {
+
+  const fetchReplayInfo = useCallback(async () => {
     if (!order?.id) return;
     
     setLoading(true);
@@ -51,21 +51,19 @@ const SessionReplayViewer = ({ order, isVisible, onClose }) => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [order?.id]);
 
   useEffect(() => {
     if (isVisible) {
       fetchReplayInfo();
     }
-  }, [isVisible, order?.id]);
+  }, [isVisible, order?.id, fetchReplayInfo]);
 
   const handleRefresh = () => {
     fetchReplayInfo();
   };
 
-  const handleFullscreen = () => {
-    setIsFullscreen(true);
-  };
+
 
   const openReplayInNewTab = () => {
     if (replayInfo?.cli_commands) {

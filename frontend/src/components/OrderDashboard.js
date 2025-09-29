@@ -5,7 +5,6 @@
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
-  Container,
   Header,
   SpaceBetween,
   Button,
@@ -14,8 +13,6 @@ import {
   Box,
   StatusIndicator,
   Alert,
-  ColumnLayout,
-  KeyValuePairs,
   Modal,
   Pagination,
   CollectionPreferences,
@@ -27,25 +24,23 @@ import {
 } from '@cloudscape-design/components';
 
 import CreateOrderWizard from './CreateOrderWizard';
-import useResizeObserverFix from '../hooks/useResizeObserverFix';
+// import useResizeObserverFix from '../hooks/useResizeObserverFix';
 
 // ResizeObserver errors are handled globally by errorSuppression utility
 
 const OrderDashboard = ({ addNotification }) => {
   const [orders, setOrders] = useState([]);
-  const [metrics, setMetrics] = useState(null);
   const [retailers, setRetailers] = useState({});
   const [loading, setLoading] = useState(true);
   const [selectedItems, setSelectedItems] = useState([]);
   const [preferences, setPreferences] = useState({
     pageSize: 20,
-    visibleContent: ['id', 'retailer', 'product', 'status', 'method', 'created']
+    visibleContent: ['id', 'retailer', 'product', 'status', 'method', 'created', 'actions']
   });
   const [filtering, setFiltering] = useState({
     tokens: [],
     operation: 'and'
   });
-  const [statusFilter, setStatusFilter] = useState(null);
   const [currentPageIndex, setCurrentPageIndex] = useState(1);
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [showCreateOrderWizard, setShowCreateOrderWizard] = useState(false);
@@ -56,9 +51,6 @@ const OrderDashboard = ({ addNotification }) => {
   const [uploadFile, setUploadFile] = useState([]);
   const [uploading, setUploading] = useState(false);
 
-  // Use the ResizeObserver fix hook
-  const { observe } = useResizeObserverFix();
-
   const fetchDashboardData = useCallback(async () => {
     // Skip if we've had too many errors
     if (errorCount >= 5) {
@@ -67,24 +59,21 @@ const OrderDashboard = ({ addNotification }) => {
     }
 
     try {
-      const [ordersRes, metricsRes, retailersRes, queueRes] = await Promise.all([
+      const [ordersRes, retailersRes, queueRes] = await Promise.all([
         fetch('/api/orders'),
-        fetch('/api/metrics/performance'),
         fetch('/api/config/retailers'),
         fetch('/api/queue/status')
       ]);
 
-      if (!ordersRes.ok || !metricsRes.ok || !retailersRes.ok || !queueRes.ok) {
+      if (!ordersRes.ok || !retailersRes.ok || !queueRes.ok) {
         throw new Error('Failed to fetch dashboard data');
       }
 
       const ordersData = await ordersRes.json();
-      const metricsData = await metricsRes.json();
       const retailersData = await retailersRes.json();
       const queueData = await queueRes.json();
 
       setOrders(Array.isArray(ordersData.orders) ? ordersData.orders : []);
-      setMetrics(metricsData.metrics);
       setRetailers(retailersData);
       setQueueStatus(queueData.status || 'active');
       setLoading(false);
@@ -95,7 +84,7 @@ const OrderDashboard = ({ addNotification }) => {
       console.error('Failed to load dashboard data:', error);
       setErrorCount(prev => {
         const newCount = prev + 1;
-        
+
         // Only show notification for first error
         if (prev === 0) {
           addNotification({
@@ -109,10 +98,10 @@ const OrderDashboard = ({ addNotification }) => {
         if (newCount >= 5) {
           setHasError(true);
         }
-        
+
         return newCount;
       });
-      
+
       setLoading(false);
     }
   }, [addNotification, errorCount]);
@@ -137,7 +126,7 @@ const OrderDashboard = ({ addNotification }) => {
     };
 
     window.addEventListener('resize', handleResize, { passive: true });
-    
+
     // Initial call to stabilize layout
     handleResize();
 
@@ -149,14 +138,14 @@ const OrderDashboard = ({ addNotification }) => {
   // 별도 useEffect로 폴링 관리 - 조건부로만 실행
   useEffect(() => {
     // 활성 주문이 있을 때만 폴링 시작
-    const hasActiveOrders = orders.some(order => 
+    const hasActiveOrders = orders.some(order =>
       ['pending', 'processing'].includes(order.status)
     );
-    
+
     if (hasActiveOrders && !hasError && errorCount < 5) {
       console.log('Starting polling - active orders detected');
       const interval = setInterval(fetchDashboardData, 30000); // 30초마다
-      
+
       return () => {
         console.log('Stopping polling');
         clearInterval(interval);
@@ -164,50 +153,25 @@ const OrderDashboard = ({ addNotification }) => {
     }
   }, [orders, hasError, errorCount, fetchDashboardData]);
 
-  const createOrder = async (method = 'strands_agent') => {
-    try {
-      const response = await fetch(`/api/test/sample-order?automation_method=${method}`, {
-        method: 'POST'
-      });
-      
-      if (!response.ok) {
-        throw new Error('Failed to create order');
-      }
-      
-      const result = await response.json();
-      
-      addNotification({
-        type: 'success',
-        header: 'Order Created',
-        content: `Order created with ${method}: ${result.order_id}`
-      });
-      fetchDashboardData();
-    } catch (error) {
-      addNotification({
-        type: 'error',
-        header: 'Order Creation Failed',
-        content: `Failed to create order: ${error.message}`
-      });
-    }
-  };
+
 
   const handleQueuePause = async () => {
     try {
       const response = await fetch('/api/queue/pause', { method: 'POST' });
-      
+
       if (!response.ok) {
         throw new Error('Failed to pause queue');
       }
-      
+
       addNotification({
         type: 'success',
         header: 'Queue Paused',
         content: 'Order processing queue has been paused successfully'
       });
-      
+
       setQueueStatus('paused');
       fetchDashboardData();
-      
+
     } catch (error) {
       addNotification({
         type: 'error',
@@ -220,20 +184,20 @@ const OrderDashboard = ({ addNotification }) => {
   const handleQueueResume = async () => {
     try {
       const response = await fetch('/api/queue/resume', { method: 'POST' });
-      
+
       if (!response.ok) {
         throw new Error('Failed to resume queue');
       }
-      
+
       addNotification({
         type: 'success',
         header: 'Queue Resumed',
         content: 'Order processing queue has been resumed successfully'
       });
-      
+
       setQueueStatus('active');
       fetchDashboardData();
-      
+
     } catch (error) {
       addNotification({
         type: 'error',
@@ -246,26 +210,59 @@ const OrderDashboard = ({ addNotification }) => {
   const handleDeleteCompleted = async () => {
     try {
       const response = await fetch('/api/orders/cleanup/completed', { method: 'DELETE' });
-      
+
       if (!response.ok) {
         throw new Error('Failed to delete completed orders');
       }
-      
+
       const result = await response.json();
-      
+
       addNotification({
         type: 'success',
         header: 'Orders Deleted',
         content: `${result.deleted_count || 0} completed orders have been deleted`
       });
-      
+
       fetchDashboardData();
-      
+
     } catch (error) {
       addNotification({
         type: 'error',
         header: 'Delete Failed',
         content: `Failed to delete completed orders: ${error.message}`
+      });
+    }
+  };
+
+  const handleForceDeleteOrder = async (orderId) => {
+    const order = orders.find(o => o.id === orderId);
+    const productName = order?.product?.name || 'Unknown Product';
+    const shortId = orderId.substring(0, 8);
+    
+    if (!window.confirm(`Are you sure you want to delete this order?\n\nOrder: ${shortId}\nProduct: ${productName}\n\nThis action cannot be undone.`)) {
+      return;
+    }
+
+    try {
+      const response = await fetch(`/api/orders/${orderId}/force`, { method: 'DELETE' });
+
+      if (!response.ok) {
+        throw new Error('Failed to delete order');
+      }
+
+      addNotification({
+        type: 'success',
+        header: 'Order Deleted',
+        content: `Order ${shortId} (${productName}) has been deleted successfully`
+      });
+
+      fetchDashboardData();
+
+    } catch (error) {
+      addNotification({
+        type: 'error',
+        header: 'Delete Failed',
+        content: `Failed to delete order: ${error.message}`
       });
     }
   };
@@ -352,12 +349,12 @@ const OrderDashboard = ({ addNotification }) => {
     try {
       const cancelPromises = selectedItems
         .filter(order => order.status === 'pending')
-        .map(order => 
+        .map(order =>
           fetch(`/api/orders/${order.id}/cancel`, { method: 'POST' })
         );
 
       await Promise.all(cancelPromises);
-      
+
       addNotification({
         type: 'success',
         header: 'Orders Cancelled',
@@ -373,6 +370,40 @@ const OrderDashboard = ({ addNotification }) => {
       });
     } finally {
       setShowCancelModal(false);
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedItems.length === 0) return;
+
+    const orderList = selectedItems.map(order => 
+      `• ${order.id.substring(0, 8)} - ${order.product?.name || 'Unknown Product'}`
+    ).join('\n');
+
+    if (!window.confirm(`Are you sure you want to delete ${selectedItems.length} selected order(s)?\n\n${orderList}\n\nThis action cannot be undone.`)) {
+      return;
+    }
+
+    try {
+      const deletePromises = selectedItems.map(order =>
+        fetch(`/api/orders/${order.id}/force`, { method: 'DELETE' })
+      );
+
+      await Promise.all(deletePromises);
+
+      addNotification({
+        type: 'success',
+        header: 'Orders Deleted',
+        content: `${selectedItems.length} order(s) deleted successfully`
+      });
+      setSelectedItems([]);
+      fetchDashboardData();
+    } catch (error) {
+      addNotification({
+        type: 'error',
+        header: 'Delete Failed',
+        content: `Failed to delete orders: ${error.message}`
+      });
     }
   };
 
@@ -432,7 +463,7 @@ const OrderDashboard = ({ addNotification }) => {
       return [];
     }
     let filtered = [...orders];
-    
+
     filtering.tokens.forEach(token => {
       const { propertyKey, value, operator } = token;
       filtered = filtered.filter(order => {
@@ -451,7 +482,7 @@ const OrderDashboard = ({ addNotification }) => {
         }
       });
     });
-    
+
     return filtered;
   }, [orders, filtering]);
 
@@ -485,11 +516,11 @@ const OrderDashboard = ({ addNotification }) => {
       cell: item => {
         const product = item.product;
         if (!product || !product.name) return 'N/A';
-        
+
         const details = [];
         if (product.size && product.size !== '-' && product.size !== 'N/A') details.push(product.size);
         if (product.color && product.color !== '-' && product.color !== 'N/A') details.push(product.color);
-        
+
         return (
           <Box>
             <div>{product.name}</div>
@@ -520,6 +551,49 @@ const OrderDashboard = ({ addNotification }) => {
       cell: item => formatTime(item.created_at),
       sortingField: 'created_at'
     },
+    {
+      id: 'actions',
+      header: 'Actions',
+      cell: item => {
+        const actions = [
+          {
+            id: 'delete',
+            text: 'Delete',
+            iconName: 'remove'
+          }
+        ];
+
+        if (item.status === 'failed') {
+          actions.unshift({
+            id: 'retry',
+            text: 'Retry',
+            iconName: 'refresh'
+          });
+        }
+
+        return (
+          <ButtonDropdown
+            variant="icon"
+            ariaLabel={`Actions for order ${item.id?.substring(0, 8) || 'N/A'}`}
+            items={actions}
+            onItemClick={(e) => {
+              switch (e.detail.id) {
+                case 'retry':
+                  handleRetryOrder(item.id);
+                  break;
+                case 'delete':
+                  handleForceDeleteOrder(item.id);
+                  break;
+                default:
+                  break;
+              }
+            }}
+            expandToViewport={true}
+          />
+        );
+      },
+      minWidth: 60
+    }
 
   ];
 
@@ -538,47 +612,9 @@ const OrderDashboard = ({ addNotification }) => {
     }
   ];
 
-  const handleStatusFilter = (status) => {
-    setStatusFilter(status);
-    setFiltering({
-      tokens: [{ propertyKey: 'status', operator: '=', value: status }],
-      operation: 'and'
-    });
-    setCurrentPageIndex(1);
-  };
 
-  const metricsItems = useMemo(() => {
-    if (!metrics) return [];
-    
-    return [
-      { label: 'Total Orders', value: metrics.overall_metrics?.total_orders || 0 },
-      { label: 'Success Rate', value: `${Math.round(metrics.overall_metrics?.success_rate || 0)}%` },
-      { label: 'Avg Processing Time', value: `${Math.round(metrics.overall_metrics?.avg_processing_time || 0)}s` },
-      { label: 'Orders Today', value: metrics.overall_metrics?.orders_today || 0 },
-      { 
-        label: 'Review Queue', 
-        value: (
-          <Link 
-            onFollow={() => handleStatusFilter('requires_human')}
-            variant={statusFilter === 'requires_human' ? 'primary' : 'secondary'}
-          >
-            {metrics.review_queue || 0}
-          </Link>
-        )
-      },
-      { 
-        label: 'Failed Orders', 
-        value: (
-          <Link 
-            onFollow={() => handleStatusFilter('failed')}
-            variant={statusFilter === 'failed' ? 'primary' : 'secondary'}
-          >
-            {metrics.failed || 0}
-          </Link>
-        )
-      }
-    ];
-  }, [metrics, statusFilter]);
+
+
 
   const filteredOrders = getFilteredOrders;
   const paginatedOrders = getPaginatedOrders;
@@ -616,7 +652,7 @@ const OrderDashboard = ({ addNotification }) => {
         actions={
           <SpaceBetween direction="horizontal" size="xs">
             {selectedItems.length > 0 && canCancelSelected() && (
-              <Button 
+              <Button
                 iconName="close"
                 onClick={() => setShowCancelModal(true)}
               >
@@ -625,32 +661,14 @@ const OrderDashboard = ({ addNotification }) => {
             )}
           </SpaceBetween>
         }
-        counter={`(${filteredOrders.length})`}
       >
         Order Automation Dashboard
       </Header>
 
-      {/* Metrics Overview */}
-      <Container
-        header={<Header variant="h2">System Metrics Overview</Header>}
-      >
-        <ColumnLayout columns={3}>
-          <Container header={<Header variant="h3">Success Metrics</Header>}>
-            <KeyValuePairs items={metricsItems.slice(0, 2)} />
-          </Container>
-          
-          <Container header={<Header variant="h3">Performance Metrics</Header>}>
-            <KeyValuePairs items={metricsItems.slice(2, 4)} />
-          </Container>
 
-          <Container header={<Header variant="h3">Capacity Metrics</Header>}>
-            <KeyValuePairs items={metricsItems.slice(4, 6)} />
-          </Container>
-        </ColumnLayout>
-      </Container>
 
       {/* Orders Table */}
-      <Container
+      <Table
         header={
           <Header
             variant="h2"
@@ -663,32 +681,32 @@ const OrderDashboard = ({ addNotification }) => {
                 <ButtonDropdown
                   variant="primary"
                   items={[
-                    { 
-                      id: 'create-wizard', 
+                    {
+                      id: 'create-wizard',
                       text: 'Create New'
                     },
-                    { 
-                      id: 'upload-csv', 
+                    {
+                      id: 'upload-csv',
                       text: 'Upload CSV'
                     },
-                    { 
-                      id: 'pause-queue', 
+                    {
+                      id: 'pause-queue',
                       text: 'Pause',
                       disabled: queueStatus === 'paused'
                     },
-                    { 
-                      id: 'resume-queue', 
+                    {
+                      id: 'resume-queue',
                       text: 'Resume',
                       disabled: queueStatus === 'active'
                     },
-                    { 
-                      id: 'delete-completed', 
-                      text: 'Delete',
-                      disabled: orders.some(order => order.status === 'processing')
+                    {
+                      id: 'delete',
+                      text: selectedItems.length > 0 ? `Delete Selected (${selectedItems.length})` : 'Delete Completed',
+                      disabled: false
                     }
                   ]}
                   onItemClick={(e) => {
-                    switch(e.detail.id) {
+                    switch (e.detail.id) {
                       case 'create-wizard':
                         window.location.href = '/orders/create';
                         break;
@@ -701,8 +719,12 @@ const OrderDashboard = ({ addNotification }) => {
                       case 'resume-queue':
                         handleQueueResume();
                         break;
-                      case 'delete-completed':
-                        handleDeleteCompleted();
+                      case 'delete':
+                        if (selectedItems.length > 0) {
+                          handleBulkDelete();
+                        } else {
+                          handleDeleteCompleted();
+                        }
                         break;
                       default:
                         break;
@@ -717,96 +739,93 @@ const OrderDashboard = ({ addNotification }) => {
             Orders
           </Header>
         }
-      >
-        <Table
-          columnDefinitions={orderColumns}
-          items={paginatedOrders}
-          loading={loading}
-          loadingText="Loading orders..."
-          selectedItems={selectedItems}
-          onSelectionChange={({ detail }) => setSelectedItems(detail.selectedItems)}
-          selectionType="multi"
-          ariaLabels={{
-            selectionGroupLabel: "Items selection",
-            allItemsSelectionLabel: ({ selectedItems }) =>
-              `${selectedItems.length} ${selectedItems.length === 1 ? "item" : "items"} selected`,
-            itemSelectionLabel: ({ selectedItems }, item) => {
-              const isItemSelected = selectedItems.filter(i => i.id === item.id).length;
-              return `${item.product?.name || 'Order'} is ${isItemSelected ? "" : "not "}selected`;
-            }
-          }}
-          filter={
-            <PropertyFilter
-              query={filtering}
-              onChange={({ detail }) => {
-                setFiltering(detail);
-                setCurrentPageIndex(1);
-              }}
-              countText={`${filteredOrders.length} matches`}
-              expandToViewport={true}
-              filteringProperties={propertyFilteringProperties}
-              filteringPlaceholder="Find orders"
-            />
+        columnDefinitions={orderColumns}
+        items={paginatedOrders}
+        loading={loading}
+        loadingText="Loading orders..."
+        selectedItems={selectedItems}
+        onSelectionChange={({ detail }) => setSelectedItems(detail.selectedItems)}
+        selectionType="multi"
+        ariaLabels={{
+          selectionGroupLabel: "Items selection",
+          allItemsSelectionLabel: ({ selectedItems }) =>
+            `${selectedItems.length} ${selectedItems.length === 1 ? "item" : "items"} selected`,
+          itemSelectionLabel: ({ selectedItems }, item) => {
+            const isItemSelected = selectedItems.filter(i => i.id === item.id).length;
+            return `${item.product?.name || 'Order'} is ${isItemSelected ? "" : "not "}selected`;
           }
-          pagination={
-            <Pagination
-              currentPageIndex={currentPageIndex}
-              onChange={({ detail }) => setCurrentPageIndex(detail.currentPageIndex)}
-              pagesCount={Math.ceil(filteredOrders.length / preferences.pageSize)}
-              ariaLabels={{
-                nextPageLabel: "Next page",
-                previousPageLabel: "Previous page",
-                pageLabel: pageNumber => `Page ${pageNumber} of all pages`
-              }}
-            />
-          }
-          preferences={
-            <CollectionPreferences
-              title="Preferences"
-              confirmLabel="Confirm"
-              cancelLabel="Cancel"
-              preferences={preferences}
-              onConfirm={({ detail }) => setPreferences(detail)}
-              pageSizePreference={{
-                title: "Page size",
-                options: [
-                  { value: 10, label: "10 orders" },
-                  { value: 20, label: "20 orders" },
-                  { value: 50, label: "50 orders" }
-                ]
-              }}
-              visibleContentPreference={{
-                title: "Select visible columns",
-                options: [{
-                  label: "Order properties",
-                  options: orderColumns.map(({ id, header }) => ({
-                    id,
-                    label: header
-                  }))
-                }]
-              }}
-            />
-          }
-          trackBy="id"
-          empty={
-            <Box margin={{ vertical: 'xs' }} textAlign="center" color="inherit">
-              <SpaceBetween size="m">
-                <b>No orders</b>
-                <Box variant="p" color="inherit">
-                  Create a test order to see automation in action.
-                </Box>
-                <Button 
-                  variant="primary"
-                  iconName="gen-ai"
-                  onClick={() => window.location.href = '/orders/create'}
-                >
-                  Create Order
-                </Button>
-              </SpaceBetween>
-            </Box>
-          }
-        />
-      </Container>
+        }}
+        filter={
+          <PropertyFilter
+            query={filtering}
+            onChange={({ detail }) => {
+              setFiltering(detail);
+              setCurrentPageIndex(1);
+            }}
+            countText={`${filteredOrders.length} matches`}
+            expandToViewport={true}
+            filteringProperties={propertyFilteringProperties}
+            filteringPlaceholder="Find orders"
+          />
+        }
+        pagination={
+          <Pagination
+            currentPageIndex={currentPageIndex}
+            onChange={({ detail }) => setCurrentPageIndex(detail.currentPageIndex)}
+            pagesCount={Math.ceil(filteredOrders.length / preferences.pageSize)}
+            ariaLabels={{
+              nextPageLabel: "Next page",
+              previousPageLabel: "Previous page",
+              pageLabel: pageNumber => `Page ${pageNumber} of all pages`
+            }}
+          />
+        }
+        preferences={
+          <CollectionPreferences
+            title="Preferences"
+            confirmLabel="Confirm"
+            cancelLabel="Cancel"
+            preferences={preferences}
+            onConfirm={({ detail }) => setPreferences(detail)}
+            pageSizePreference={{
+              title: "Page size",
+              options: [
+                { value: 10, label: "10 orders" },
+                { value: 20, label: "20 orders" },
+                { value: 50, label: "50 orders" }
+              ]
+            }}
+            visibleContentPreference={{
+              title: "Select visible columns",
+              options: [{
+                label: "Order properties",
+                options: orderColumns.map(({ id, header }) => ({
+                  id,
+                  label: header
+                }))
+              }]
+            }}
+          />
+        }
+        trackBy="id"
+        empty={
+          <Box margin={{ vertical: 'xs' }} textAlign="center" color="inherit">
+            <SpaceBetween size="m">
+              <b>No orders</b>
+              <Box variant="p" color="inherit">
+                Create a test order to see automation in action.
+              </Box>
+              <Button
+                variant="primary"
+                iconName="gen-ai"
+                onClick={() => window.location.href = '/orders/create'}
+              >
+                Create Order
+              </Button>
+            </SpaceBetween>
+          </Box>
+        }
+      />
 
       {/* Create Order Wizard */}
       {showCreateOrderWizard && (
@@ -841,8 +860,8 @@ const OrderDashboard = ({ addNotification }) => {
               <Button onClick={downloadSampleCSV}>
                 Download Sample
               </Button>
-              <Button 
-                variant="primary" 
+              <Button
+                variant="primary"
                 onClick={handleFileUpload}
                 disabled={!uploadFile || uploadFile.length === 0}
                 loading={uploading}
@@ -857,15 +876,15 @@ const OrderDashboard = ({ addNotification }) => {
           <Box variant="span">
             Upload a CSV file to create multiple orders at once.
           </Box>
-          
+
           <Alert type="info">
             <Box>
-              <strong>Required fields:</strong> customer_name, customer_email, retailer, product_url, product_name, 
-              shipping_first_name, shipping_last_name, shipping_address_1, shipping_city, shipping_state, 
+              <strong>Required fields:</strong> customer_name, customer_email, retailer, product_url, product_name,
+              shipping_first_name, shipping_last_name, shipping_address_1, shipping_city, shipping_state,
               shipping_postal_code, shipping_country
             </Box>
             <Box margin={{ top: 'xs' }}>
-              <strong>Optional fields:</strong> product_size, product_color, product_quantity, product_price, 
+              <strong>Optional fields:</strong> product_size, product_color, product_quantity, product_price,
               automation_method, ai_model, priority, instructions
             </Box>
             <Box margin={{ top: 'xs' }} variant="small" color="text-body-secondary">

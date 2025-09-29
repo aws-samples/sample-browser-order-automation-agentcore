@@ -24,6 +24,7 @@ import ReviewQueue from './pages/ReviewQueue';
 import FailedOrders from './pages/FailedOrders';
 import OrderDetails from './pages/OrderDetails';
 import CreateOrder from './pages/CreateOrder';
+import SecretVault from './pages/SecretVault';
 
 function AppContent() {
   const [navigationOpen, setNavigationOpen] = useState(true);
@@ -142,7 +143,8 @@ function AppContent() {
       type: 'section',
       text: 'Configuration',
       items: [
-        { type: 'link', text: 'Settings', href: '/settings' }
+        { type: 'link', text: 'Settings', href: '/settings' },
+        { type: 'link', text: 'Secret Vault', href: '/secrets' }
       ]
     }
   ];
@@ -155,19 +157,6 @@ function AppContent() {
       iconName: connectionStatus === 'connected' ? 'status-positive' :
         connectionStatus === 'connecting' ? 'status-in-progress' : 'status-negative',
       variant: connectionStatus === 'connected' ? 'normal' : 'primary'
-    },
-    {
-      type: 'button',
-      iconName: 'notification',
-      ariaLabel: 'View help panel',
-      badge: notifications.length > 0,
-      onClick: () => setToolsOpen(!toolsOpen)
-    },
-    {
-      type: 'button',
-      text: 'API Docs',
-      href: '/docs',
-      external: true
     }
   ];
 
@@ -190,6 +179,8 @@ function AppContent() {
         return [baseBreadcrumb, { text: 'Failed Orders', href: '/failed' }];
       case 'settings':
         return [baseBreadcrumb, { text: 'Settings', href: '/settings' }];
+      case 'secrets':
+        return [baseBreadcrumb, { text: 'Secret Vault', href: '/secrets' }];
       default:
         return [baseBreadcrumb];
     }
@@ -213,28 +204,30 @@ function AppContent() {
             }
           >
             <div>
-              <p>This dashboard demonstrates AI-powered order automation for luxury retail using two approaches:</p>
+              <p>This dashboard demonstrates AI-powered order automation for luxury retail using advanced browser automation:</p>
 
               <h3>Automation Methods</h3>
               <ul>
-                <li><strong>Nova Act:</strong> AI-driven browser automation with natural language commands</li>
-                <li><strong>Playwright MCP:</strong> Structured accessibility data with Bedrock LLM analysis</li>
+                <li><strong>Strands:</strong> AI agents with browser tools for intelligent e-commerce automation</li>
+                <li><strong>Nova Act:</strong> Natural language browser automation with AgentCore integration</li>
               </ul>
 
               <h3>Key Features</h3>
               <ul>
-                <li><strong>Real-time Monitoring:</strong> Live browser session thumbnails and progress tracking</li>
-                <li><strong>Dual Approach Testing:</strong> Compare Nova Act vs Playwright MCP performance</li>
+                <li><strong>Real-time Monitoring:</strong> Live browser session viewing and progress tracking</li>
+                <li><strong>Session Replay:</strong> Complete session recording and playback capabilities</li>
+                <li><strong>Manual Control:</strong> Take control of browser sessions when needed</li>
+                <li><strong>Screenshot Documentation:</strong> Automatic step-by-step visual documentation</li>
                 <li><strong>Human-in-the-Loop:</strong> Automatic escalation for complex scenarios</li>
-                <li><strong>Success Metrics:</strong> Track automation success rate and performance</li>
               </ul>
 
               <h3>Getting Started</h3>
               <ol>
-                <li>Click "Create Order" to start a sample automation</li>
-                <li>Monitor progress in real-time via WebSocket updates</li>
-                <li>Compare automation methods using "Compare Both Methods"</li>
-                <li>View detailed session monitoring with browser thumbnails</li>
+                <li>Click "Create Order" to start an automation</li>
+                <li>Choose between Strands or Nova Act automation methods</li>
+                <li>Monitor progress with live browser viewing</li>
+                <li>Review session replays and screenshots</li>
+                <li>Take manual control when needed</li>
               </ol>
             </div>
           </HelpPanel>
@@ -320,6 +313,73 @@ function AppContent() {
           </HelpPanel>
         );
 
+      case 'settings':
+        return (
+          <HelpPanel
+            header={<h2>System Settings</h2>}
+          >
+            <div>
+              <p>Configure system-wide settings for order automation and AI models.</p>
+
+              <h3>AI Model Configuration</h3>
+              <ul>
+                <li><strong>Default Models:</strong> Set preferred AI models for different automation methods</li>
+                <li><strong>Model Parameters:</strong> Configure temperature, max tokens, and other model settings</li>
+                <li><strong>Fallback Models:</strong> Define backup models when primary models are unavailable</li>
+              </ul>
+
+              <h3>Retailer Configuration</h3>
+              <ul>
+                <li><strong>Retailer URLs:</strong> Manage starting URLs for different retailers</li>
+                <li><strong>Site-specific Settings:</strong> Configure automation parameters per retailer</li>
+                <li><strong>Default Options:</strong> Set preferred retailers and automation methods</li>
+              </ul>
+
+              <h3>System Configuration</h3>
+              <ul>
+                <li><strong>Timeout Settings:</strong> Configure automation timeouts and retry limits</li>
+                <li><strong>Notification Settings:</strong> Set up alerts and notifications</li>
+                <li><strong>Logging Level:</strong> Adjust system logging verbosity</li>
+              </ul>
+            </div>
+          </HelpPanel>
+        );
+
+      case 'secrets':
+        return (
+          <HelpPanel
+            header={<h2>Secret Vault</h2>}
+          >
+            <div>
+              <p>Securely manage login credentials for retailer websites used in automation.</p>
+
+              <h3>Credential Management</h3>
+              <ul>
+                <li><strong>Add Credentials:</strong> Store username/password for retailer sites</li>
+                <li><strong>Site Matching:</strong> Credentials are automatically matched to retailers</li>
+                <li><strong>Secure Storage:</strong> All passwords are encrypted at rest</li>
+                <li><strong>Status Indicators:</strong> See which credentials are active and working</li>
+              </ul>
+
+              <h3>Security Features</h3>
+              <ul>
+                <li><strong>Encryption:</strong> AES-256 encryption for all stored passwords</li>
+                <li><strong>Access Control:</strong> Credentials only accessible during automation</li>
+                <li><strong>Audit Trail:</strong> Track when credentials are used</li>
+                <li><strong>Expiration:</strong> Set expiration dates for temporary credentials</li>
+              </ul>
+
+              <h3>Best Practices</h3>
+              <ul>
+                <li><strong>Unique Passwords:</strong> Use unique passwords for each retailer</li>
+                <li><strong>Regular Updates:</strong> Update credentials periodically</li>
+                <li><strong>Test Credentials:</strong> Verify credentials work before automation</li>
+                <li><strong>Remove Unused:</strong> Delete credentials for inactive retailers</li>
+              </ul>
+            </div>
+          </HelpPanel>
+        );
+
       default:
         return null;
     }
@@ -336,6 +396,7 @@ function AppContent() {
         <Route path="/review" element={<ReviewQueue addNotification={addNotification} />} />
         <Route path="/failed" element={<FailedOrders addNotification={addNotification} />} />
         <Route path="/settings" element={<Settings addNotification={addNotification} />} />
+        <Route path="/secrets" element={<SecretVault addNotification={addNotification} />} />
       </Routes>
     );
   };

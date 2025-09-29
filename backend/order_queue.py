@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from database import DatabaseManager, Order, OrderStatus, OrderPriority, AutomationMethod
-from config_manager import ConfigManager
+from services.settings_service import SettingsService
 
 logger = logging.getLogger(__name__)
 
@@ -40,9 +40,9 @@ class QueueMetrics:
 class OrderQueue:
     """Order queue manager with priority handling"""
     
-    def __init__(self, db_manager: DatabaseManager, config_manager: ConfigManager):
+    def __init__(self, db_manager: DatabaseManager):
         self.db_manager = db_manager
-        self.config_manager = config_manager
+        self.settings_service = SettingsService(db_manager)
         self.status = QueueStatus.STOPPED
         self.processing_orders: Dict[str, asyncio.Task] = {}
         self.active_agents: Dict[str, Any] = {}  # Track active agents by order_id
@@ -57,7 +57,11 @@ class OrderQueue:
     def _load_queue_settings(self):
         """Load queue settings from config"""
         try:
-            queue_settings = self.config_manager.get_queue_settings()
+            system_config = self.settings_service.get_system_config()
+            queue_settings = {
+                "max_concurrent_orders": system_config.get("max_concurrent_orders", 5),
+                "order_timeout_minutes": 30
+            }
             self.max_concurrent = queue_settings.get("max_concurrent_orders", 5)
             self.order_timeout = queue_settings.get("order_timeout_minutes", 30) * 60
             self.retry_delay = queue_settings.get("retry_delay_seconds", 60)
@@ -202,22 +206,13 @@ class OrderQueue:
         try:
             logger.info(f"Started processing order {order.id} for {order.retailer} using {order.automation_method.value}")
             
-            # Validate configuration
-            logger.info(f"Validating configuration for {order.retailer} with {order.automation_method.value}")
-            if not self.config_manager.validate_order_config(order.retailer, order.automation_method.value):
-                error_msg = f"Invalid configuration for {order.retailer} with {order.automation_method.value}"
-                logger.error(error_msg)
-                raise ValueError(error_msg)
+            # Basic validation: retailer URLs already validated during order creation
+            logger.info(f"Processing order for {order.retailer} with {order.automation_method.value}")
             logger.info("Configuration validation passed")
-            
-            # Import agent factory to create appropriate automation agent
-            logger.info("Importing AgentFactory...")
-            from agents.main_agent import AgentFactory
-            logger.info("AgentFactory imported successfully")
             
             # Create agent based on automation method
             logger.info(f"Getting automation config for {order.automation_method.value}")
-            agent_config = self.config_manager.get_automation_config(order.automation_method.value)
+            agent_config = self.settings_service.get_automation_config(order.automation_method.value)
             logger.info(f"Agent config retrieved: {agent_config}")
             
             # Add AI model to config if specified
@@ -230,19 +225,98 @@ class OrderQueue:
             agent_config['db_manager'] = self.db_manager
             
             logger.info(f"Creating agent for {order.automation_method.value}...")
-            agent = await AgentFactory.create_agent(
-                automation_method=order.automation_method.value,
-                config=agent_config,
-                retailer_config=self.config_manager.get_retailer_config(order.retailer)
-            )
+            
+            # Create agent directly based on method
+            # Get retailer configuration from database
+            retailer_urls = self.settings_service.get_retailer_urls(order.retailer)
+            default_url = next((url for url in retailer_urls if url['is_default']), retailer_urls[0] if retailer_urls else None)
+            
+            # Get site credentials for this retailer
+            site_credentials = None
+            try:
+                # Look for credentials matching the retailer name or URL
+                secrets = self.db_manager.get_secrets(site_name=order.retailer, include_passwords=True)
+                if not secrets and default_url:
+                    # Try to find by URL if no exact name match
+                    all_secrets = self.db_manager.get_secrets(include_passwords=True)
+                    for secret in all_secrets:
+                        if secret.site_url and default_url.get("starting_url"):
+                            # Check if URLs match (basic domain matching)
+                            try:
+                                from urllib.parse import urlparse
+                                secret_domain = urlparse(secret.site_url).netloc.lower()
+                                retailer_domain = urlparse(default_url["starting_url"]).netloc.lower()
+                                if secret_domain == retailer_domain or secret_domain in retailer_domain or retailer_domain in secret_domain:
+                                    secrets = [secret]
+                                    break
+                            except Exception:
+                                continue
+                
+                if secrets:
+                    site_credentials = {
+                        "username": secrets[0].username,
+                        "password": secrets[0].password,
+                        "additional_fields": secrets[0].additional_fields or {},
+                        "site_name": secrets[0].site_name,
+                        "site_url": secrets[0].site_url
+                    }
+                    logger.info(f"Found site credentials for {order.retailer}")
+                else:
+                    logger.info(f"No site credentials found for {order.retailer}")
+            except Exception as cred_error:
+                logger.warning(f"Failed to retrieve site credentials: {cred_error}")
+
+            retailer_config = {
+                "name": order.retailer.replace('_', ' ').title(),
+                "base_url": default_url['starting_url'] if default_url else "",
+                "automation_methods": ["strands", "nova_act"],
+                "preferred_method": "nova_act",
+                "status": "active",
+                "credentials": site_credentials,  # Add credentials to config
+            }
+            
+            if order.automation_method.value == "nova_act":
+                from agents.nova_act_agent import NovaActAgent
+                agent = NovaActAgent(agent_config, retailer_config, db_manager=self.db_manager)
+            elif order.automation_method.value == "strands":
+                from agents.strands_agent import StrandsAgent
+                from services.browser_service import get_browser_service
+                
+                browser_service = get_browser_service(agent_config, self.db_manager)
+                agent = StrandsAgent(agent_config, retailer_config, db_manager=self.db_manager, browser_service=browser_service)
+            else:
+                raise ValueError(f"Unknown automation method: {order.automation_method.value}")
             
             # Track active agent
             self.active_agents[order.id] = agent
             
             # Start agent session
             logger.info(f"Starting session for agent...")
-            session_result = await agent.start_session(session_id=order.id)
-            logger.info(f"Session started: {session_result}")
+            try:
+                session_result = await agent.start_session(session_id=order.id)
+                logger.info(f"Session started: {session_result}")
+            except Exception as session_error:
+                logger.error(f"Failed to start agent session: {session_error}")
+                # Update order status to failed
+                self.db_manager.update_order_status(
+                    order_id=order.id,
+                    status=OrderStatus.FAILED,
+                    progress=100,
+                    current_step="Processing failed due to system error",
+                    error_message="Session not started"
+                )
+                return
+            
+            if not session_result or session_result.get("status") != "active":
+                logger.error(f"Session failed to start properly: {session_result}")
+                self.db_manager.update_order_status(
+                    order_id=order.id,
+                    status=OrderStatus.FAILED,
+                    progress=100,
+                    current_step="Processing failed due to system error",
+                    error_message="Session initialization failed"
+                )
+                return
             
             # Progress callback for real-time updates
             async def progress_callback(progress_data):
@@ -284,6 +358,8 @@ class OrderQueue:
                     error_message=result.get("message")
                 )
                 logger.warning(f"Order {order.id} requires human intervention")
+                # Keep agent active for manual control - do not cleanup
+                logger.info(f"Keeping browser session active for manual intervention: {order.id}")
                 
             else:
                 self.db_manager.update_order_status(
@@ -294,13 +370,21 @@ class OrderQueue:
                     error_message=result.get("error", "Unknown error")
                 )
                 logger.error(f"Order {order.id} failed: {result.get('error')}")
+                
+                # Clean up agent resources for failed orders
+                await agent.cleanup()
+                
+                # Remove from active agents
+                if order.id in self.active_agents:
+                    del self.active_agents[order.id]
             
-            # Clean up agent resources
-            await agent.cleanup()
-            
-            # Remove from active agents
-            if order.id in self.active_agents:
-                del self.active_agents[order.id]
+            # Clean up agent resources only for completed orders
+            if result.get("success"):
+                await agent.cleanup()
+                
+                # Remove from active agents
+                if order.id in self.active_agents:
+                    del self.active_agents[order.id]
             
         except Exception as e:
             import traceback
@@ -328,9 +412,15 @@ class OrderQueue:
             except Exception as db_error:
                 logger.error(f"Failed to update order status: {db_error}")
             
-            # Remove from active agents on error
+            # Clean up agent on error
             if order.id in self.active_agents:
-                del self.active_agents[order.id]
+                try:
+                    agent = self.active_agents[order.id]
+                    await agent.cleanup(force=True)  # Force cleanup on error
+                except Exception as cleanup_error:
+                    logger.error(f"Failed to cleanup agent for order {order.id}: {cleanup_error}")
+                finally:
+                    del self.active_agents[order.id]
     
     async def add_order(
         self,
@@ -347,8 +437,9 @@ class OrderQueue:
         """Add a new order to the queue"""
         try:
             # Validate inputs
-            if not self.config_manager.is_retailer_supported(retailer):
-                raise ValueError(f"Retailer {retailer} is not supported")
+            retailer_urls = self.settings_service.get_retailer_urls(retailer)
+            if not retailer_urls:
+                raise ValueError(f"Retailer {retailer} is not configured. Please add retailer URLs in Settings.")
             
             # Convert automation method string to enum
             try:
@@ -356,9 +447,8 @@ class OrderQueue:
             except ValueError:
                 raise ValueError(f"Invalid automation method: {automation_method}")
             
-            # Validate configuration
-            if not self.config_manager.validate_order_config(retailer, automation_method):
-                raise ValueError(f"Invalid configuration for {retailer} with {automation_method}")
+            # Basic validation: retailer URLs already validated
+            logger.info(f"Creating order for {retailer} with {automation_method}")
             
             # Check queue size
             pending_count = len([o for o in self.db_manager.get_all_orders(status_filter=["pending"]) if o.status == OrderStatus.PENDING])
@@ -440,7 +530,8 @@ class OrderQueue:
         """Update queue settings"""
         try:
             # Update config manager
-            self.config_manager.update_system_config("queue_settings", settings)
+            # Update queue settings in system config
+            self.settings_service.update_system_config(settings)
             
             # Reload settings
             self._load_queue_settings()
@@ -467,10 +558,10 @@ class OrderQueue:
 order_queue: Optional[OrderQueue] = None
 
 
-def initialize_order_queue(db_manager: DatabaseManager, config_manager: ConfigManager) -> OrderQueue:
+def initialize_order_queue(db_manager: DatabaseManager) -> OrderQueue:
     """Initialize the global order queue"""
     global order_queue
-    order_queue = OrderQueue(db_manager, config_manager)
+    order_queue = OrderQueue(db_manager)
     return order_queue
 
 

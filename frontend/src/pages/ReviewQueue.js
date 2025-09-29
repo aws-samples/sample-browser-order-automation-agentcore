@@ -9,8 +9,6 @@ import {
   Pagination,
   CollectionPreferences,
   PropertyFilter,
-  ColumnLayout,
-  Container,
   Link,
   Alert
 } from '@cloudscape-design/components';
@@ -186,7 +184,7 @@ const ReviewQueue = ({ addNotification }) => {
       id: 'product_name',
       header: 'Product',
       cell: item => (
-        <Link external href={item.product_url}>
+        <Link href={`/orders/${item.id}`}>
           {item.product_name}
         </Link>
       ),
@@ -296,57 +294,37 @@ const ReviewQueue = ({ addNotification }) => {
     <Header
       variant="h1"
       description="Orders requiring human review due to automation issues"
-      actions={
-        <SpaceBetween direction="horizontal" size="xs">
-          {selectedItems.length > 0 && (
-            <Button
-              variant="primary"
-              onClick={handleBulkComplete}
-              loading={completingReviews}
-            >
-              Complete {selectedItems.length} Reviews
-            </Button>
-          )}
-          <Button onClick={fetchReviewQueue} loading={loading}>
-            Refresh
-          </Button>
-        </SpaceBetween>
-      }
-      counter={`(${filteredItems.length})`}
     >
       Review Queue
     </Header>
 
-    {reviewItems.length > 0 && (
-      <Container>
-        <ColumnLayout columns={4} variant="text-grid">
-          <div>
-            <Box variant="awsui-key-label">Total Items</Box>
-            <Box variant="awsui-value-large">{reviewItems.length}</Box>
-          </div>
-          <div>
-            <Box variant="awsui-key-label">Total Order Value</Box>
-            <Box variant="awsui-value-large">
-              ${reviewItems.reduce((sum, item) => sum + (item.product_price || 0), 0).toFixed(2)}
-            </Box>
-          </div>
-          <div>
-            <Box variant="awsui-key-label">Nova Agent Issues</Box>
-            <Box variant="awsui-value-large">
-              {reviewItems.filter(item => item.automation_method === 'strands_agent').length}
-            </Box>
-          </div>
-          <div>
-            <Box variant="awsui-key-label">Playwright MCP Issues</Box>
-            <Box variant="awsui-value-large">
-              {reviewItems.filter(item => item.automation_method === 'playwright_mcp').length}
-            </Box>
-          </div>
-        </ColumnLayout>
-      </Container>
-    )}
+
 
     <Table
+      header={
+        <Header
+          variant="h2"
+          counter={`(${filteredItems.length})`}
+          actions={
+            <SpaceBetween direction="horizontal" size="xs">
+              <Button iconName="refresh" onClick={fetchReviewQueue} loading={loading}>
+                Refresh
+              </Button>
+              {selectedItems.length > 0 && (
+                <Button
+                  variant="primary"
+                  onClick={handleBulkComplete}
+                  loading={completingReviews}
+                >
+                  Complete {selectedItems.length} Reviews
+                </Button>
+              )}
+            </SpaceBetween>
+          }
+        >
+          Review Items
+        </Header>
+      }
       columnDefinitions={columnDefinitions}
       items={paginatedItems}
       loading={loading}
@@ -409,11 +387,13 @@ const ReviewQueue = ({ addNotification }) => {
         />
       }
       empty={
-        <Box textAlign="center" color="inherit">
-          <b>No items in review queue</b>
-          <Box variant="p" color="inherit">
-            All orders are processing successfully and don't require human review.
-          </Box>
+        <Box margin={{ vertical: 'xs' }} textAlign="center" color="inherit">
+          <SpaceBetween size="m">
+            <b>No items in review queue</b>
+            <Box variant="p" color="inherit">
+              All orders are processing successfully and don't require human review.
+            </Box>
+          </SpaceBetween>
         </Box>
       }
       trackBy="id"

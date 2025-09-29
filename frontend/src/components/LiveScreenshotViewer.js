@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Container,
   Header,
@@ -19,7 +19,7 @@ const LiveScreenshotViewer = ({ order, isVisible, onClose }) => {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const intervalRef = useRef(null);
 
-  const screenshots = order?.screenshots || [];
+  const screenshots = useMemo(() => order?.screenshots || [], [order?.screenshots]);
 
   const screenshotsLength = screenshots.length;
   

@@ -381,7 +381,7 @@ const LiveBrowserViewer = ({ orderId }) => {
         throw new Error('AWS DCV Web SDK not loaded');
       }
 
-      const { sessionId, presignedUrl, authToken } = presignedData;
+      const { presignedUrl } = presignedData;
       
       // Set log level for debugging
       if (window.dcv.setLogLevel && window.dcv.LogLevel) {

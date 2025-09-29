@@ -42,6 +42,7 @@ class OrderStatus(Enum):
     FAILED = "failed"
     CANCELLED = "cancelled"
     REQUIRES_HUMAN = "requires_human"
+    MANUAL_CONTROL = "manual_control"
 
 
 class OrderPriority(Enum):
@@ -53,8 +54,7 @@ class OrderPriority(Enum):
 
 class AutomationMethod(Enum):
     NOVA_ACT = "nova_act"
-    STRANDS_BROWSER = "strands_browser"
-    STRANDS_PLAYWRIGHT_MCP = "strands_playwright_mcp"
+    STRANDS = "strands"
 
 
 class OrderModel(Base):
@@ -68,50 +68,55 @@ class OrderModel(Base):
     priority = Column(Integer, nullable=False)
     automation_method = Column(String(50), nullable=False)
     ai_model = Column(String(200))  # AI model used for automation
-    
+
     # Product information
     product_name = Column(String(500), nullable=False)
     product_url = Column(Text, nullable=False)
     product_size = Column(String(50))
     product_color = Column(String(100))
     product_price = Column(Float)
-    
+
     # Customer information
     customer_name = Column(String(200), nullable=False)
     customer_email = Column(String(200), nullable=False)
-    
+
     # Shipping address
     shipping_address = Column(JSON, nullable=False)
-    
+
     # Payment information (tokenized)
     payment_token = Column(String(500))
-    
+
     # Order tracking
-    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(
+        DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)
+    )
     updated_at = Column(
-        DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
+        DateTime,
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
     )
     started_at = Column(DateTime)
     completed_at = Column(DateTime)
     progress = Column(Integer, default=0)
     current_step = Column(String(200))
-    
+
     # Results
     order_confirmation_number = Column(String(100))
     tracking_number = Column(String(100))
     estimated_delivery = Column(DateTime)
-    
+
     # Error handling
     error_message = Column(Text)
     requires_human_review = Column(Boolean, default=False)
     human_review_notes = Column(Text)
-    
+
     # Automation metadata
     session_id = Column(String(100))
     automation_metadata = Column("metadata", JSON)
     execution_logs = Column(JSON)
     screenshots = Column(JSON)
-    
+
     # Session replay
     session_replay_s3_bucket = Column(String(200))
     session_replay_s3_prefix = Column(String(500))
@@ -125,17 +130,24 @@ class SessionModel(Base):
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     automation_method = Column(String(50), nullable=False)
-    status = Column(String(20), nullable=False)  # active, processing, completed, terminated
+    status = Column(
+        String(20), nullable=False
+    )  # active, processing, completed, terminated
     retailer = Column(String(100))
     current_url = Column(Text)
     thumbnail_url = Column(Text)
-    
-    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    created_at = Column(
+        DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)
+    )
     updated_at = Column(
-        DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
+        DateTime,
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
     )
     terminated_at = Column(DateTime)
-    
+
     session_metadata = Column("metadata", JSON)
 
 
@@ -147,7 +159,59 @@ class SettingsModel(Base):
     key = Column(String(100), primary_key=True)
     value = Column(JSON, nullable=False)
     updated_at = Column(
-        DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
+        DateTime,
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
+class RetailerUrlModel(Base):
+    """SQLAlchemy Retailer URL mapping model"""
+
+    __tablename__ = "retailer_urls"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    retailer = Column(String(100), nullable=False)
+    website_name = Column(String(200), nullable=False)
+    starting_url = Column(Text, nullable=False)
+    is_default = Column(Boolean, default=False)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(
+        DateTime,
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+    updated_at = Column(
+        DateTime,
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
+class SecretVaultModel(Base):
+    """SQLAlchemy Secret Vault model for storing site credentials"""
+
+    __tablename__ = "secret_vault"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    site_name = Column(String, nullable=False)  # e.g., "amazon", "ebay"
+    site_url = Column(String, nullable=False)   # e.g., "https://amazon.com"
+    username = Column(String, nullable=True)    # Encrypted username/email
+    password = Column(String, nullable=True)    # Encrypted password
+    additional_fields = Column(JSON, nullable=True)  # Other fields like security questions
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(
+        DateTime,
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+    updated_at = Column(
+        DateTime,
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
     )
 
 
@@ -164,7 +228,7 @@ class Order:
     product_url: str
     customer_name: str
     customer_email: str
-    
+
     # Optional fields with defaults
     ai_model: Optional[str] = None
     product_size: Optional[str] = None
@@ -195,7 +259,13 @@ class Order:
     def to_dict(self):
         data = asdict(self)
         # Convert datetime objects to ISO strings with UTC timezone
-        for field in ["created_at", "updated_at", "started_at", "completed_at", "estimated_delivery"]:
+        for field in [
+            "created_at",
+            "updated_at",
+            "started_at",
+            "completed_at",
+            "estimated_delivery",
+        ]:
             if data[field]:
                 dt = data[field]
                 # Ensure datetime is timezone-aware (assume UTC if naive)
@@ -203,18 +273,27 @@ class Order:
                     dt = dt.replace(tzinfo=timezone.utc)
                 data[field] = dt.isoformat()
         # Convert enums to values
-        data["status"] = self.status.value if hasattr(self.status, 'value') else self.status
-        data["priority"] = self.priority.value if hasattr(self.priority, 'value') else self.priority
-        data["automation_method"] = self.automation_method.value if hasattr(self.automation_method, 'value') else self.automation_method
-        
+        data["status"] = (
+            self.status.value if hasattr(self.status, "value") else self.status
+        )
+        data["priority"] = (
+            self.priority.value if hasattr(self.priority, "value") else self.priority
+        )
+        data["automation_method"] = (
+            self.automation_method.value
+            if hasattr(self.automation_method, "value")
+            else self.automation_method
+        )
+
         # Add display name for automation method
         method_display_names = {
             "nova_act": "Nova Act + AgentCore Browser",
-            "strands_browser": "Strands + Browser Tools + AgentCore Browser", 
-            "strands_playwright_mcp": "Strands + Playwright MCP + AgentCore Browser"
+            "strands": "Strands + AgentCore Browser + Browser Tools",
         }
-        data["automation_method_display"] = method_display_names.get(data["automation_method"], data["automation_method"])
-        
+        data["automation_method_display"] = method_display_names.get(
+            data["automation_method"], data["automation_method"]
+        )
+
         # Add product object for frontend compatibility
         data["product"] = {
             "name": data.get("product_name") or "-",
@@ -222,9 +301,9 @@ class Order:
             "size": data.get("product_size") or "-",  # Replace None with "-"
             "color": data.get("product_color") or "-",  # Replace None with "-"
             "price": data.get("product_price"),
-            "quantity": 1  # Default quantity
+            "quantity": 1,  # Default quantity
         }
-        
+
         # Add status tooltip for failed orders
         if data["status"] == "failed" and data.get("error_message"):
             data["status_tooltip"] = data["error_message"]
@@ -232,16 +311,24 @@ class Order:
             data["status_tooltip"] = "Order processing failed"
         else:
             data["status_tooltip"] = None
-        
+
         # Ensure execution_logs and screenshots are included
         data["execution_logs"] = self.execution_logs or []
         data["screenshots"] = self.screenshots or []
-        
+
         # Clean up None values and replace with "-" for display (except specific fields)
         for key, value in data.items():
-            if value is None and key not in ['completed_at', 'started_at', 'estimated_delivery', 'product_price', 'status_tooltip', 'execution_logs', 'screenshots']:
+            if value is None and key not in [
+                "completed_at",
+                "started_at",
+                "estimated_delivery",
+                "product_price",
+                "status_tooltip",
+                "execution_logs",
+                "screenshots",
+            ]:
                 data[key] = "-"
-        
+
         return data
 
 
@@ -270,7 +357,42 @@ class BrowserSession:
                     dt = dt.replace(tzinfo=timezone.utc)
                 data[field] = dt.isoformat()
         # Convert enums to values
-        data["automation_method"] = self.automation_method.value if hasattr(self.automation_method, 'value') else self.automation_method
+        data["automation_method"] = (
+            self.automation_method.value
+            if hasattr(self.automation_method, "value")
+            else self.automation_method
+        )
+        return data
+
+
+@dataclass
+class SecretVault:
+    """Secret Vault dataclass for API responses"""
+
+    id: str
+    site_name: str
+    site_url: str
+    username: Optional[str] = None
+    password: Optional[str] = None  # This will be masked in API responses
+    additional_fields: Optional[Dict[str, Any]] = None
+    is_active: bool = True
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    def to_dict(self, include_password: bool = False):
+        data = asdict(self)
+        # Convert datetime objects to ISO strings with UTC timezone
+        for field in ["created_at", "updated_at"]:
+            if data[field]:
+                dt = data[field]
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                data[field] = dt.isoformat()
+        
+        # Mask password unless explicitly requested
+        if not include_password and data.get("password"):
+            data["password"] = "***masked***"
+        
         return data
 
 
@@ -284,7 +406,9 @@ class DatabaseManager:
                 # Use RDS in production
                 db_url = os.getenv("DATABASE_URL")
                 if not db_url:
-                    raise ValueError("DATABASE_URL environment variable required for production")
+                    raise ValueError(
+                        "DATABASE_URL environment variable required for production"
+                    )
             else:
                 # Use SQLite locally
                 db_path = os.path.join(os.path.dirname(__file__), "order_automation.db")
@@ -308,7 +432,7 @@ class DatabaseManager:
             logger.info("Using PostgreSQL database (RDS)")
         else:
             logger.info("Using SQLite database (local)")
-        
+
         # Run database migrations
         self._run_migrations()
 
@@ -316,7 +440,7 @@ class DatabaseManager:
         """Run database migrations"""
         try:
             with self.get_session() as session:
-                # Check if ai_model column exists
+                # Migration 1: Check if ai_model column exists
                 if not self.use_postgres:
                     # SQLite migration
                     try:
@@ -324,7 +448,9 @@ class DatabaseManager:
                         logger.info("ai_model column already exists")
                     except Exception:
                         logger.info("Adding ai_model column to orders table")
-                        session.execute(text("ALTER TABLE orders ADD COLUMN ai_model VARCHAR(200)"))
+                        session.execute(
+                            text("ALTER TABLE orders ADD COLUMN ai_model VARCHAR(200)")
+                        )
                         session.commit()
                         logger.info("Successfully added ai_model column")
                 else:
@@ -334,10 +460,42 @@ class DatabaseManager:
                         logger.info("ai_model column already exists")
                     except Exception:
                         logger.info("Adding ai_model column to orders table")
-                        session.execute(text("ALTER TABLE orders ADD COLUMN ai_model VARCHAR(200)"))
+                        session.execute(
+                            text("ALTER TABLE orders ADD COLUMN ai_model VARCHAR(200)")
+                        )
                         session.commit()
                         logger.info("Successfully added ai_model column")
-                        
+
+                # Migration 2: Update old automation method values
+                try:
+                    logger.info("Updating old automation method values")
+                    # Update old values to new ones
+                    session.execute(
+                        text(
+                            "UPDATE orders SET automation_method = 'strands' WHERE automation_method = 'strands_browser'"
+                        )
+                    )
+                    session.execute(
+                        text(
+                            "UPDATE orders SET automation_method = 'strands' WHERE automation_method = 'strands_playwright_mcp'"
+                        )
+                    )
+                    session.execute(
+                        text(
+                            "UPDATE orders SET automation_method = 'strands' WHERE automation_method = 'strands_unified'"
+                        )
+                    )
+                    session.commit()
+                    logger.info("Successfully updated automation method values")
+                except Exception as e:
+                    logger.warning(f"Failed to update automation method values: {e}")
+
+                # Migration 3: Initialize default retailer URLs
+                try:
+                    self.initialize_default_retailer_urls()
+                except Exception as e:
+                    logger.warning(f"Failed to initialize default retailer URLs: {e}")
+
         except Exception as e:
             logger.error(f"Migration failed: {e}")
             # Don't raise exception to allow system to continue
@@ -370,8 +528,8 @@ class DatabaseManager:
             if metadata is None:
                 metadata = {}
             if instructions:
-                metadata['instructions'] = instructions
-                
+                metadata["instructions"] = instructions
+
             with self.get_session() as session:
                 order = OrderModel(
                     retailer=retailer,
@@ -412,7 +570,10 @@ class DatabaseManager:
             raise
 
     def get_all_orders(
-        self, limit: int = 50, status_filter: List[str] = None, retailer_filter: str = None
+        self,
+        limit: int = 50,
+        status_filter: List[str] = None,
+        retailer_filter: str = None,
     ) -> List[Order]:
         """Get all orders with optional filtering"""
         try:
@@ -421,14 +582,16 @@ class DatabaseManager:
 
                 if status_filter:
                     query = query.filter(OrderModel.status.in_(status_filter))
-                
+
                 if retailer_filter:
                     query = query.filter(OrderModel.retailer == retailer_filter)
 
                 query = query.order_by(OrderModel.created_at.desc()).limit(limit)
                 order_models = query.all()
 
-                return [self._model_to_order(order_model) for order_model in order_models]
+                return [
+                    self._model_to_order(order_model) for order_model in order_models
+                ]
         except Exception as e:
             logger.error(f"DatabaseManager.get_all_orders() failed: {e}")
             logger.error(f"Parameters: limit={limit}, status_filter={status_filter}")
@@ -532,7 +695,9 @@ class DatabaseManager:
             logger.error(f"DatabaseManager.update_order_status({order_id}) failed: {e}")
             raise
 
-    def add_execution_log(self, order_id: str, level: str, message: str, step: Optional[str] = None):
+    def add_execution_log(
+        self, order_id: str, level: str, message: str, step: Optional[str] = None
+    ):
         """Add execution log entry to order"""
         try:
             with self.get_session() as session:
@@ -552,7 +717,7 @@ class DatabaseManager:
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                     "level": level,
                     "message": message,
-                    "step": step
+                    "step": step,
                 }
 
                 # Add to logs (create new list to trigger SQLAlchemy update)
@@ -562,13 +727,21 @@ class DatabaseManager:
                 order_model.updated_at = datetime.now(timezone.utc)
 
                 session.commit()
-                logger.debug(f"Added execution log to order {order_id}: {level} - {message}")
+                logger.debug(
+                    f"Added execution log to order {order_id}: {level} - {message}"
+                )
 
         except Exception as e:
             logger.error(f"DatabaseManager.add_execution_log({order_id}) failed: {e}")
             raise
 
-    def add_screenshot(self, order_id: str, screenshot_url: str, step: Optional[str] = None, description: Optional[str] = None):
+    def add_screenshot(
+        self,
+        order_id: str,
+        screenshot_url: str,
+        step: Optional[str] = None,
+        description: Optional[str] = None,
+    ):
         """Add screenshot to order"""
         try:
             with self.get_session() as session:
@@ -588,7 +761,7 @@ class DatabaseManager:
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                     "url": screenshot_url,
                     "step": step,
-                    "description": description
+                    "description": description,
                 }
 
                 # Add to screenshots (create new list to trigger SQLAlchemy update)
@@ -604,11 +777,20 @@ class DatabaseManager:
             logger.error(f"DatabaseManager.add_screenshot({order_id}) failed: {e}")
             raise
 
-    def update_session_replay_info(self, order_id: str, s3_bucket: str, s3_prefix: str, enabled: bool = True, session_id: str = None):
+    def update_session_replay_info(
+        self,
+        order_id: str,
+        s3_bucket: str,
+        s3_prefix: str,
+        enabled: bool = True,
+        session_id: str = None,
+    ):
         """Update session replay information for an order"""
         try:
             with self.get_session() as session:
-                order_model = session.query(OrderModel).filter(OrderModel.id == order_id).first()
+                order_model = (
+                    session.query(OrderModel).filter(OrderModel.id == order_id).first()
+                )
                 if not order_model:
                     raise ValueError(f"Order {order_id} not found")
 
@@ -620,17 +802,23 @@ class DatabaseManager:
                 order_model.updated_at = datetime.now(timezone.utc)
 
                 session.commit()
-                logger.debug(f"Updated session replay info for order {order_id}: {s3_bucket}/{s3_prefix}")
+                logger.debug(
+                    f"Updated session replay info for order {order_id}: {s3_bucket}/{s3_prefix}"
+                )
 
         except Exception as e:
-            logger.error(f"DatabaseManager.update_session_replay_info({order_id}) failed: {e}")
+            logger.error(
+                f"DatabaseManager.update_session_replay_info({order_id}) failed: {e}"
+            )
             raise
 
     def get_session_replay_info(self, order_id: str) -> Dict[str, Any]:
         """Get session replay information for an order"""
         try:
             with self.get_session() as session:
-                order_model = session.query(OrderModel).filter(OrderModel.id == order_id).first()
+                order_model = (
+                    session.query(OrderModel).filter(OrderModel.id == order_id).first()
+                )
                 if not order_model:
                     raise ValueError(f"Order {order_id} not found")
 
@@ -638,11 +826,13 @@ class DatabaseManager:
                     "s3_bucket": order_model.session_replay_s3_bucket,
                     "s3_prefix": order_model.session_replay_s3_prefix,
                     "enabled": order_model.session_replay_enabled or False,
-                    "session_id": order_model.session_id
+                    "session_id": order_model.session_id,
                 }
 
         except Exception as e:
-            logger.error(f"DatabaseManager.get_session_replay_info({order_id}) failed: {e}")
+            logger.error(
+                f"DatabaseManager.get_session_replay_info({order_id}) failed: {e}"
+            )
             raise
 
     def cancel_order(self, order_id: str) -> bool:
@@ -674,7 +864,9 @@ class DatabaseManager:
         """Delete an order from database"""
         try:
             with self.get_session() as session:
-                result = session.query(OrderModel).filter(OrderModel.id == order_id).delete()
+                result = (
+                    session.query(OrderModel).filter(OrderModel.id == order_id).delete()
+                )
                 session.commit()
                 return result > 0
         except Exception as e:
@@ -700,7 +892,9 @@ class DatabaseManager:
                 session.add(browser_session)
                 session.commit()
 
-                logger.info(f"Created browser session {browser_session.id}: {automation_method.value}")
+                logger.info(
+                    f"Created browser session {browser_session.id}: {automation_method.value}"
+                )
                 return browser_session.id
         except Exception as e:
             logger.error(f"DatabaseManager.create_session() failed: {e}")
@@ -711,11 +905,15 @@ class DatabaseManager:
         try:
             with self.get_session() as db_session:
                 session_model = (
-                    db_session.query(SessionModel).filter(SessionModel.id == session_id).first()
+                    db_session.query(SessionModel)
+                    .filter(SessionModel.id == session_id)
+                    .first()
                 )
                 return self._model_to_session(session_model) if session_model else None
         except Exception as e:
-            logger.error(f"DatabaseManager.get_browser_session({session_id}) failed: {e}")
+            logger.error(
+                f"DatabaseManager.get_browser_session({session_id}) failed: {e}"
+            )
             raise
 
     def update_session(
@@ -729,7 +927,9 @@ class DatabaseManager:
         try:
             with self.get_session() as db_session:
                 session_model = (
-                    db_session.query(SessionModel).filter(SessionModel.id == session_id).first()
+                    db_session.query(SessionModel)
+                    .filter(SessionModel.id == session_id)
+                    .first()
                 )
 
                 if not session_model:
@@ -765,7 +965,10 @@ class DatabaseManager:
                     .all()
                 )
 
-                return [self._model_to_session(session_model) for session_model in session_models]
+                return [
+                    self._model_to_session(session_model)
+                    for session_model in session_models
+                ]
         except Exception as e:
             logger.error(f"DatabaseManager.get_all_sessions() failed: {e}")
             return []
@@ -795,7 +998,9 @@ class DatabaseManager:
                 stats["review_queue"] = review_count
 
                 # Calculate total orders
-                stats["total_orders"] = sum(stats[status.value] for status in OrderStatus)
+                stats["total_orders"] = sum(
+                    stats[status.value] for status in OrderStatus
+                )
 
                 # Calculate average processing time for completed orders
                 completed_orders_with_times = (
@@ -817,11 +1022,15 @@ class DatabaseManager:
                         if started_at and completed_at and completed_at > started_at:
                             duration = (completed_at - started_at).total_seconds()
                             # Filter out unreasonably long durations (more than 2 hours)
-                            if 0 < duration <= 7200:  # Only count durations between 0 and 2 hours
+                            if (
+                                0 < duration <= 7200
+                            ):  # Only count durations between 0 and 2 hours
                                 total_time += duration
                                 valid_orders += 1
                             elif duration > 7200:
-                                logger.warning(f"Excluding abnormally long order duration: {duration}s")
+                                logger.warning(
+                                    f"Excluding abnormally long order duration: {duration}s"
+                                )
 
                     avg_time = total_time / valid_orders if valid_orders > 0 else 0
                 else:
@@ -852,15 +1061,21 @@ class DatabaseManager:
                     .group_by(OrderModel.retailer)
                     .all()
                 )
-                stats["retailer_breakdown"] = {retailer: count for retailer, count in retailer_counts}
+                stats["retailer_breakdown"] = {
+                    retailer: count for retailer, count in retailer_counts
+                }
 
                 # Automation method breakdown
                 method_counts = (
-                    session.query(OrderModel.automation_method, func.count(OrderModel.id))
+                    session.query(
+                        OrderModel.automation_method, func.count(OrderModel.id)
+                    )
                     .group_by(OrderModel.automation_method)
                     .all()
                 )
-                stats["automation_method_breakdown"] = {method: count for method, count in method_counts}
+                stats["automation_method_breakdown"] = {
+                    method: count for method, count in method_counts
+                }
 
                 return stats
         except Exception as e:
@@ -907,7 +1122,11 @@ class DatabaseManager:
             with self.get_session() as session:
                 result = (
                     session.query(OrderModel)
-                    .filter(OrderModel.status.in_([OrderStatus.COMPLETED.value, OrderStatus.FAILED.value]))
+                    .filter(
+                        OrderModel.status.in_(
+                            [OrderStatus.COMPLETED.value, OrderStatus.FAILED.value]
+                        )
+                    )
                     .delete(synchronize_session=False)
                 )
                 session.commit()
@@ -1062,3 +1281,312 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"DatabaseManager.update_multiple_settings() failed: {e}")
             raise
+
+    # Retailer URL Management
+    def get_retailer_urls(self, retailer: str = None) -> List[Dict[str, Any]]:
+        """Get retailer URL mappings"""
+        try:
+            with self.get_session() as session:
+                query = session.query(RetailerUrlModel).filter(RetailerUrlModel.is_active == True)
+                if retailer:
+                    query = query.filter(RetailerUrlModel.retailer == retailer)
+                
+                urls = query.order_by(RetailerUrlModel.is_default.desc(), RetailerUrlModel.created_at).all()
+                return [
+                    {
+                        "id": url.id,
+                        "retailer": url.retailer,
+                        "website_name": url.website_name,
+                        "starting_url": url.starting_url,
+                        "is_default": url.is_default,
+                        "is_active": url.is_active,
+                        "created_at": url.created_at.isoformat(),
+                        "updated_at": url.updated_at.isoformat(),
+                    }
+                    for url in urls
+                ]
+        except Exception as e:
+            logger.error(f"DatabaseManager.get_retailer_urls({retailer}) failed: {e}")
+            return []
+
+    def add_retailer_url(self, retailer: str, website_name: str, starting_url: str, is_default: bool = False) -> str:
+        """Add a new retailer URL mapping"""
+        try:
+            with self.get_session() as session:
+                # If this is set as default, unset other defaults for this retailer
+                if is_default:
+                    session.query(RetailerUrlModel).filter(
+                        RetailerUrlModel.retailer == retailer,
+                        RetailerUrlModel.is_default == True
+                    ).update({"is_default": False})
+
+                url_mapping = RetailerUrlModel(
+                    retailer=retailer,
+                    website_name=website_name,
+                    starting_url=starting_url,
+                    is_default=is_default
+                )
+                session.add(url_mapping)
+                session.commit()
+                
+                logger.info(f"Added retailer URL mapping: {retailer} -> {website_name}")
+                return url_mapping.id
+        except Exception as e:
+            logger.error(f"DatabaseManager.add_retailer_url() failed: {e}")
+            raise
+
+    def update_retailer_url(self, url_id: str, **kwargs) -> bool:
+        """Update a retailer URL mapping"""
+        try:
+            with self.get_session() as session:
+                url_mapping = session.query(RetailerUrlModel).filter(RetailerUrlModel.id == url_id).first()
+                if not url_mapping:
+                    return False
+
+                # If setting as default, unset other defaults for this retailer
+                if kwargs.get("is_default"):
+                    session.query(RetailerUrlModel).filter(
+                        RetailerUrlModel.retailer == url_mapping.retailer,
+                        RetailerUrlModel.is_default == True,
+                        RetailerUrlModel.id != url_id
+                    ).update({"is_default": False})
+
+                # Update fields
+                for key, value in kwargs.items():
+                    if hasattr(url_mapping, key):
+                        setattr(url_mapping, key, value)
+                
+                url_mapping.updated_at = datetime.now(timezone.utc)
+                session.commit()
+                
+                logger.info(f"Updated retailer URL mapping: {url_id}")
+                return True
+        except Exception as e:
+            logger.error(f"DatabaseManager.update_retailer_url({url_id}) failed: {e}")
+            return False
+
+    def delete_retailer_url(self, url_id: str) -> bool:
+        """Delete a retailer URL mapping (soft delete)"""
+        try:
+            with self.get_session() as session:
+                url_mapping = session.query(RetailerUrlModel).filter(RetailerUrlModel.id == url_id).first()
+                if not url_mapping:
+                    return False
+
+                url_mapping.is_active = False
+                url_mapping.updated_at = datetime.now(timezone.utc)
+                session.commit()
+                
+                logger.info(f"Deleted retailer URL mapping: {url_id}")
+                return True
+        except Exception as e:
+            logger.error(f"DatabaseManager.delete_retailer_url({url_id}) failed: {e}")
+            return False
+
+    def get_default_retailer_url(self, retailer: str) -> Optional[Dict[str, Any]]:
+        """Get default URL for a retailer"""
+        try:
+            with self.get_session() as session:
+                url_mapping = (
+                    session.query(RetailerUrlModel)
+                    .filter(
+                        RetailerUrlModel.retailer == retailer,
+                        RetailerUrlModel.is_default == True,
+                        RetailerUrlModel.is_active == True
+                    )
+                    .first()
+                )
+                
+                if url_mapping:
+                    return {
+                        "id": url_mapping.id,
+                        "retailer": url_mapping.retailer,
+                        "website_name": url_mapping.website_name,
+                        "starting_url": url_mapping.starting_url,
+                        "is_default": url_mapping.is_default,
+                        "is_active": url_mapping.is_active,
+                    }
+                return None
+        except Exception as e:
+            logger.error(f"DatabaseManager.get_default_retailer_url({retailer}) failed: {e}")
+            return None
+
+    def initialize_default_retailer_urls(self):
+        """Initialize default retailer URL mappings - starts empty for user configuration"""
+        try:
+            # Check if we already have retailer URLs
+            existing_urls = self.get_retailer_urls()
+            if existing_urls:
+                logger.info("Retailer URLs already exist, skipping initialization")
+                return
+            
+            # Start with empty configuration - users will add their own retailers
+            logger.info("Retailer URL table initialized (empty) - ready for user configuration")
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize retailer URLs table: {e}")
+
+    # Secret Vault Management
+    def create_secret(self, site_name: str, site_url: str, username: str = None, password: str = None, additional_fields: Dict[str, Any] = None) -> str:
+        """Create a new secret vault entry"""
+        try:
+            with self.get_session() as session:
+                # Encrypt sensitive data (basic implementation - in production use proper encryption)
+                encrypted_password = self._encrypt_data(password) if password else None
+                encrypted_username = self._encrypt_data(username) if username else None
+                
+                secret = SecretVaultModel(
+                    site_name=site_name,
+                    site_url=site_url,
+                    username=encrypted_username,
+                    password=encrypted_password,
+                    additional_fields=additional_fields or {},
+                    is_active=True
+                )
+                session.add(secret)
+                session.commit()
+                logger.info(f"Created secret vault entry for {site_name}")
+                return secret.id
+        except Exception as e:
+            logger.error(f"DatabaseManager.create_secret() failed: {e}")
+            raise
+
+    def get_secrets(self, site_name: str = None, include_passwords: bool = False) -> List[SecretVault]:
+        """Get secret vault entries"""
+        try:
+            # Check if table exists
+            from sqlalchemy import inspect
+            inspector = inspect(self.engine)
+            if 'secret_vault' not in inspector.get_table_names():
+                logger.warning("secret_vault table does not exist, returning empty list")
+                return []
+            
+            with self.get_session() as session:
+                query = session.query(SecretVaultModel).filter(SecretVaultModel.is_active == True)
+                if site_name:
+                    query = query.filter(SecretVaultModel.site_name == site_name)
+                
+                secrets = query.order_by(SecretVaultModel.created_at.desc()).all()
+                result = []
+                for secret in secrets:
+                    # Decrypt sensitive data
+                    decrypted_username = self._decrypt_data(secret.username) if secret.username else None
+                    decrypted_password = self._decrypt_data(secret.password) if secret.password and include_passwords else None
+                    
+                    result.append(SecretVault(
+                        id=secret.id,
+                        site_name=secret.site_name,
+                        site_url=secret.site_url,
+                        username=decrypted_username,
+                        password=decrypted_password,
+                        additional_fields=secret.additional_fields,
+                        is_active=secret.is_active,
+                        created_at=secret.created_at,
+                        updated_at=secret.updated_at
+                    ))
+                return result
+        except Exception as e:
+            logger.error(f"DatabaseManager.get_secrets() failed: {e}")
+            return []
+
+    def get_secret(self, secret_id: str, include_password: bool = False) -> Optional[SecretVault]:
+        """Get a specific secret vault entry"""
+        try:
+            with self.get_session() as session:
+                secret = session.query(SecretVaultModel).filter(
+                    SecretVaultModel.id == secret_id,
+                    SecretVaultModel.is_active == True
+                ).first()
+                
+                if secret:
+                    # Decrypt sensitive data
+                    decrypted_username = self._decrypt_data(secret.username) if secret.username else None
+                    decrypted_password = self._decrypt_data(secret.password) if secret.password and include_password else None
+                    
+                    return SecretVault(
+                        id=secret.id,
+                        site_name=secret.site_name,
+                        site_url=secret.site_url,
+                        username=decrypted_username,
+                        password=decrypted_password,
+                        additional_fields=secret.additional_fields,
+                        is_active=secret.is_active,
+                        created_at=secret.created_at,
+                        updated_at=secret.updated_at
+                    )
+                return None
+        except Exception as e:
+            logger.error(f"DatabaseManager.get_secret({secret_id}) failed: {e}")
+            return None
+
+    def update_secret(self, secret_id: str, site_name: str = None, site_url: str = None, username: str = None, password: str = None, additional_fields: Dict[str, Any] = None) -> bool:
+        """Update a secret vault entry"""
+        try:
+            with self.get_session() as session:
+                secret = session.query(SecretVaultModel).filter(
+                    SecretVaultModel.id == secret_id,
+                    SecretVaultModel.is_active == True
+                ).first()
+                
+                if not secret:
+                    return False
+                
+                # Update fields
+                if site_name is not None:
+                    secret.site_name = site_name
+                if site_url is not None:
+                    secret.site_url = site_url
+                if username is not None:
+                    secret.username = self._encrypt_data(username) if username else None
+                if password is not None:
+                    secret.password = self._encrypt_data(password) if password else None
+                if additional_fields is not None:
+                    secret.additional_fields = additional_fields
+                
+                secret.updated_at = datetime.now(timezone.utc)
+                session.commit()
+                logger.info(f"Updated secret vault entry {secret_id}")
+                return True
+        except Exception as e:
+            logger.error(f"DatabaseManager.update_secret({secret_id}) failed: {e}")
+            return False
+
+    def delete_secret(self, secret_id: str) -> bool:
+        """Delete (deactivate) a secret vault entry"""
+        try:
+            with self.get_session() as session:
+                secret = session.query(SecretVaultModel).filter(
+                    SecretVaultModel.id == secret_id,
+                    SecretVaultModel.is_active == True
+                ).first()
+                
+                if not secret:
+                    return False
+                
+                secret.is_active = False
+                secret.updated_at = datetime.now(timezone.utc)
+                session.commit()
+                logger.info(f"Deleted secret vault entry {secret_id}")
+                return True
+        except Exception as e:
+            logger.error(f"DatabaseManager.delete_secret({secret_id}) failed: {e}")
+            return False
+
+    def _encrypt_data(self, data: str) -> str:
+        """Basic encryption for sensitive data (implement proper encryption in production)"""
+        if not data:
+            return None
+        # This is a basic implementation - use proper encryption in production
+        import base64
+        return base64.b64encode(data.encode()).decode()
+
+    def _decrypt_data(self, encrypted_data: str) -> str:
+        """Basic decryption for sensitive data (implement proper decryption in production)"""
+        if not encrypted_data:
+            return None
+        # This is a basic implementation - use proper decryption in production
+        import base64
+        try:
+            return base64.b64decode(encrypted_data.encode()).decode()
+        except Exception:
+            return encrypted_data  # Return as-is if decryption fails
