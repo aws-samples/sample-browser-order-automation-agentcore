@@ -44,13 +44,10 @@ const OrderDashboard = ({ addNotification }) => {
   const [currentPageIndex, setCurrentPageIndex] = useState(1);
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [showCreateOrderWizard, setShowCreateOrderWizard] = useState(false);
-  const [showUploadModal, setShowUploadModal] = useState(false);
+
   const [errorCount, setErrorCount] = useState(0);
   const [hasError, setHasError] = useState(false);
   const [queueStatus, setQueueStatus] = useState('active'); // active, paused
-  const [uploadFile, setUploadFile] = useState([]);
-  const [uploading, setUploading] = useState(false);
-
   const fetchDashboardData = useCallback(async () => {
     // Skip if we've had too many errors
     if (errorCount >= 5) {
@@ -60,7 +57,7 @@ const OrderDashboard = ({ addNotification }) => {
 
     try {
       const [ordersRes, retailersRes, queueRes] = await Promise.all([
-        fetch('/api/orders'),
+        fetch('/api/orders?limit=500'),
         fetch('/api/config/retailers'),
         fetch('/api/queue/status')
       ]);
@@ -268,58 +265,10 @@ const OrderDashboard = ({ addNotification }) => {
   };
 
   const handleUploadCSV = () => {
-    setShowUploadModal(true);
+    window.location.href = '/orders/batch-upload';
   };
 
-  const handleFileUpload = async () => {
-    if (!uploadFile || uploadFile.length === 0) return;
 
-    setUploading(true);
-    try {
-      const formData = new FormData();
-      formData.append('file', uploadFile[0]);
-
-      const response = await fetch('/api/orders/upload-csv', {
-        method: 'POST',
-        body: formData
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to upload CSV file');
-      }
-
-      const result = await response.json();
-
-      addNotification({
-        type: 'success',
-        header: 'CSV Uploaded',
-        content: `${result.created_count || 0} orders created from CSV file`
-      });
-
-      setShowUploadModal(false);
-      setUploadFile([]);
-      fetchDashboardData();
-
-    } catch (error) {
-      addNotification({
-        type: 'error',
-        header: 'Upload Failed',
-        content: `Failed to upload CSV: ${error.message}`
-      });
-    } finally {
-      setUploading(false);
-    }
-  };
-
-  const downloadSampleCSV = () => {
-    // Use the public sample file instead of inline content
-    const link = document.createElement('a');
-    link.href = '/sample-orders.csv';
-    link.download = 'sample-orders.csv';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
 
   const handleRetryOrder = async (orderId) => {
     try {
@@ -703,7 +652,8 @@ const OrderDashboard = ({ addNotification }) => {
                       id: 'delete',
                       text: selectedItems.length > 0 ? `Delete Selected (${selectedItems.length})` : 'Delete Completed',
                       disabled: false
-                    }
+                    },
+
                   ]}
                   onItemClick={(e) => {
                     switch (e.detail.id) {
@@ -845,77 +795,7 @@ const OrderDashboard = ({ addNotification }) => {
         />
       )}
 
-      {/* CSV Upload Modal */}
-      <Modal
-        visible={showUploadModal}
-        onDismiss={() => setShowUploadModal(false)}
-        header="Upload Orders CSV"
-        closeAriaLabel="Close modal"
-        footer={
-          <Box float="right">
-            <SpaceBetween direction="horizontal" size="xs">
-              <Button variant="link" onClick={() => setShowUploadModal(false)}>
-                Cancel
-              </Button>
-              <Button onClick={downloadSampleCSV}>
-                Download Sample
-              </Button>
-              <Button
-                variant="primary"
-                onClick={handleFileUpload}
-                disabled={!uploadFile || uploadFile.length === 0}
-                loading={uploading}
-              >
-                Upload
-              </Button>
-            </SpaceBetween>
-          </Box>
-        }
-      >
-        <SpaceBetween size="m">
-          <Box variant="span">
-            Upload a CSV file to create multiple orders at once.
-          </Box>
 
-          <Alert type="info">
-            <Box>
-              <strong>Required fields:</strong> customer_name, customer_email, retailer, product_url, product_name,
-              shipping_first_name, shipping_last_name, shipping_address_1, shipping_city, shipping_state,
-              shipping_postal_code, shipping_country
-            </Box>
-            <Box margin={{ top: 'xs' }}>
-              <strong>Optional fields:</strong> product_size, product_color, product_quantity, product_price,
-              automation_method, ai_model, priority, instructions
-            </Box>
-            <Box margin={{ top: 'xs' }} variant="small" color="text-body-secondary">
-              <strong>Demo tip:</strong> Leave size/color empty for agent auto-detection. Use instructions field for specific guidance.
-            </Box>
-          </Alert>
-
-          <FormField
-            label="Select CSV file"
-            description="Upload a CSV file with order data"
-          >
-            <FileUpload
-              onChange={({ detail }) => setUploadFile(detail.value)}
-              value={uploadFile}
-              i18nStrings={{
-                uploadButtonText: e => e ? "Choose files" : "Choose file",
-                dropzoneText: e => e ? "Drop files to upload" : "Drop file to upload",
-                removeFileAriaLabel: e => `Remove file ${e + 1}`,
-                limitShowFewer: "Show fewer files",
-                limitShowMore: "Show more files",
-                errorIconAriaLabel: "Error",
-                warningIconAriaLabel: "Warning"
-              }}
-              showFileLastModified
-              showFileSize
-              accept=".csv"
-              constraintText="CSV files only, max 10MB"
-            />
-          </FormField>
-        </SpaceBetween>
-      </Modal>
 
       {/* Bulk Cancel Modal */}
       <Modal

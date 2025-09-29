@@ -50,6 +50,8 @@ const CreateOrder = ({ addNotification }) => {
     // Instructions for agent (optional)
     instructions: ''
   });
+  
+  const [userSelectedModel, setUserSelectedModel] = useState(false);
 
   const fetchRetailerUrls = useCallback(async () => {
     try {
@@ -102,9 +104,10 @@ const CreateOrder = ({ addNotification }) => {
       // When automation method changes to nova_act, set AI model to Nova Act
       if (field === 'automation_method' && value === 'nova_act') {
         newData.ai_model = 'nova_act';
+        setUserSelectedModel(false); // Reset user selection tracking
       }
-      // When automation method changes from nova_act to strands, reset to default model
-      else if (field === 'automation_method' && value === 'strands' && prev.automation_method === 'nova_act') {
+      // When automation method changes from nova_act to strands, set default only if user hasn't selected
+      else if (field === 'automation_method' && value === 'strands' && prev.automation_method === 'nova_act' && !userSelectedModel) {
         newData.ai_model = 'us.anthropic.claude-sonnet-4-20250514-v1:0';
       }
 
@@ -311,7 +314,10 @@ const CreateOrder = ({ addNotification }) => {
           {formData.automation_method === 'strands' && (
             <ModelSelector
               selectedModel={formData.ai_model}
-              onChange={(model) => handleInputChange('ai_model', model)}
+              onChange={(model) => {
+                handleInputChange('ai_model', model);
+                setUserSelectedModel(true); // Mark that user manually selected a model
+              }}
               label="AI Model"
               description="Bedrock model used with Strands and AgentCore Browser for web automation"
             />

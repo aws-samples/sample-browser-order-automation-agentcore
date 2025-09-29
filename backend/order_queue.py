@@ -72,7 +72,7 @@ class OrderQueue:
             self.max_concurrent = queue_settings.get("max_concurrent_orders", 5)
             self.order_timeout = queue_settings.get("order_timeout_minutes", 30) * 60
             self.retry_delay = queue_settings.get("retry_delay_seconds", 60)
-            self.max_queue_size = queue_settings.get("max_queue_size", 100)
+            self.max_queue_size = queue_settings.get("max_queue_size", 500)
 
             logger.info(f"Queue settings loaded: max_concurrent={self.max_concurrent}")
 
@@ -82,7 +82,7 @@ class OrderQueue:
             self.max_concurrent = 5
             self.order_timeout = 1800  # 30 minutes
             self.retry_delay = 60
-            self.max_queue_size = 100
+            self.max_queue_size = 500
 
     async def start(self):
         """Start the order queue processor"""

@@ -30,8 +30,8 @@ class APIService {
   }
 
   // Order Management
-  async getOrders() {
-    return this.request('/api/orders');
+  async getOrders(limit = 500) {
+    return this.request(`/api/orders?limit=${limit}`);
   }
 
   async getOrder(orderId) {

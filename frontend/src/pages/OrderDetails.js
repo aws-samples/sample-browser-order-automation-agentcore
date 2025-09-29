@@ -45,7 +45,7 @@ const OrderDetails = ({ addNotification }) => {
     try {
       setError(null);
       const response = await fetch(`/api/orders/${orderId}`);
-      
+
       if (!response.ok) {
         if (response.status === 404) {
           setOrder(null);
@@ -54,14 +54,14 @@ const OrderDetails = ({ addNotification }) => {
         }
         throw new Error('Failed to fetch order');
       }
-      
+
       const orderData = await response.json();
       const prevLogsCount = order?.execution_logs?.length || 0;
       const newLogsCount = orderData?.execution_logs?.length || 0;
-      
+
       setOrder(orderData);
       setLoading(false);
-      
+
       // Auto-scroll to bottom if new logs were added
       if (newLogsCount > prevLogsCount && logsContainerRef.current) {
         setTimeout(() => {
@@ -99,7 +99,7 @@ const OrderDetails = ({ addNotification }) => {
 
   useEffect(() => {
     fetchOrder();
-    
+
     // Set up WebSocket listeners for real-time updates
     const unsubscribeLog = wsService.subscribe('log_update', (data) => {
       if (data.order_id === orderId) {
@@ -114,7 +114,7 @@ const OrderDetails = ({ addNotification }) => {
           ...data,
           id: Date.now() + Math.random()
         }]);
-        
+
         // Also trigger a refresh for the main order data
         fetchOrder();
       }
@@ -145,7 +145,7 @@ const OrderDetails = ({ addNotification }) => {
       if (['pending', 'processing'].includes(order.status)) {
         console.log(`Starting polling for order ${order?.id} with status: ${order.status}`);
         startPolling();
-        
+
         // Auto-show live view for processing orders (embedded, no modals)
         if (order.status === 'processing' && !autoShowLiveView) {
           setAutoShowLiveView(true);
@@ -164,11 +164,11 @@ const OrderDetails = ({ addNotification }) => {
   const handleCancelOrder = async () => {
     try {
       const response = await fetch(`/api/orders/${orderId}/cancel`, { method: 'POST' });
-      
+
       if (!response.ok) {
         throw new Error('Failed to cancel order');
       }
-      
+
       addNotification({
         type: 'success',
         header: 'Order Cancelled',
@@ -190,11 +190,11 @@ const OrderDetails = ({ addNotification }) => {
     setControlLoading(true);
     try {
       const response = await fetch(`/api/orders/${orderId}/take-control`, { method: 'POST' });
-      
+
       if (!response.ok) {
         throw new Error('Failed to take manual control');
       }
-      
+
       const result = await response.json();
       if (result.success) {
         setManualControlEnabled(true);
@@ -221,11 +221,11 @@ const OrderDetails = ({ addNotification }) => {
     setControlLoading(true);
     try {
       const response = await fetch(`/api/orders/${orderId}/release-control`, { method: 'POST' });
-      
+
       if (!response.ok) {
         throw new Error('Failed to release manual control');
       }
-      
+
       const result = await response.json();
       if (result.success) {
         setManualControlEnabled(false);
@@ -252,11 +252,11 @@ const OrderDetails = ({ addNotification }) => {
     setControlLoading(true);
     try {
       const response = await fetch(`/api/orders/${orderId}/resume-nova-act`, { method: 'POST' });
-      
+
       if (!response.ok) {
         throw new Error('Failed to resume Nova Act');
       }
-      
+
       const result = await response.json();
       if (result.success) {
         addNotification({
@@ -372,18 +372,19 @@ const OrderDetails = ({ addNotification }) => {
                 { label: 'Status', value: getStatusIndicator(order.status, order.status_tooltip) },
                 { label: 'Retailer', value: order.retailer || 'N/A' },
                 { label: 'Automation Method', value: order.automation_method_display || order.automation_method || 'N/A' },
-                { 
-                  label: 'AI Model', 
+                {
+                  label: 'AI Model',
                   value: order?.ai_model ? (
                     <span title={order.ai_model}>
-                      {order.ai_model.includes('claude-sonnet-4') ? 'Claude 3.5 Sonnet (New)' :
-                       order.ai_model.includes('claude-sonnet') ? 'Claude 3.5 Sonnet' :
-                       order.ai_model.includes('claude-haiku') ? 'Claude 3.5 Haiku' :
-                       order.ai_model.includes('claude-opus') ? 'Claude 3 Opus' :
-                       order.ai_model.includes('gpt-4') ? 'GPT-4' :
-                       order.ai_model.includes('gpt-3.5') ? 'GPT-3.5' :
-                       order.ai_model.length > 50 ? `${order.ai_model.substring(0, 30)}...` :
-                       order.ai_model}
+                      {order.ai_model.includes('claude-sonnet-4') ? 'Claude Sonnet 4' :
+                        order.ai_model.includes('claude-3-5-sonnet') ? 'Claude 3.5 Sonnet' :
+                          order.ai_model.includes('claude-sonnet') ? 'Claude 3.5 Sonnet' :
+                            order.ai_model.includes('claude-haiku') ? 'Claude 3.5 Haiku' :
+                              order.ai_model.includes('claude-opus') ? 'Claude 3 Opus' :
+                                order.ai_model.includes('gpt-4') ? 'GPT-4' :
+                                  order.ai_model.includes('gpt-3.5') ? 'GPT-3.5' :
+                                    order.ai_model.length > 50 ? `${order.ai_model.substring(0, 30)}...` :
+                                      order.ai_model}
                     </span>
                   ) : 'System Default'
                 }
@@ -411,10 +412,10 @@ const OrderDetails = ({ addNotification }) => {
         </Container>
 
         {/* Execution Logs - CloudWatch Style */}
-        <Container 
+        <Container
           header={
-            <Header 
-              variant="h3" 
+            <Header
+              variant="h3"
               counter={`(${(order.execution_logs || []).length})`}
               description="Real-time automation agent logs"
             >
@@ -423,9 +424,9 @@ const OrderDetails = ({ addNotification }) => {
           }
           fitHeight
         >
-          <div 
+          <div
             ref={logsContainerRef}
-            style={{ 
+            style={{
               height: '400px',
               overflowY: 'auto',
               padding: '0',
@@ -438,10 +439,10 @@ const OrderDetails = ({ addNotification }) => {
             aria-label="Execution logs"
           >
             {(order.execution_logs || []).length === 0 ? (
-              <div style={{ 
-                padding: '20px', 
-                textAlign: 'center', 
-                color: '#879196' 
+              <div style={{
+                padding: '20px',
+                textAlign: 'center',
+                color: '#879196'
               }}>
                 <div>No execution logs yet</div>
                 <div style={{ fontSize: '12px', marginTop: '8px' }}>
@@ -453,9 +454,9 @@ const OrderDetails = ({ addNotification }) => {
                 {order.execution_logs.map((log, index) => {
                   const timestamp = new Date(log.timestamp).toISOString();
                   const logLevel = log.level || 'INFO';
-                  const logColor = logLevel === 'ERROR' ? '#ff6b6b' : 
-                                  logLevel === 'WARNING' ? '#ffa726' : '#e8eaed';
-                  
+                  const logColor = logLevel === 'ERROR' ? '#ff6b6b' :
+                    logLevel === 'WARNING' ? '#ffa726' : '#e8eaed';
+
                   return (
                     <div
                       key={index}
@@ -480,10 +481,10 @@ const OrderDetails = ({ addNotification }) => {
 
         {/* Nova Act Real-time Updates */}
         {order.automation_method === 'nova_act' && novaActUpdates.length > 0 && (
-          <Container 
+          <Container
             header={
-              <Header 
-                variant="h3" 
+              <Header
+                variant="h3"
                 counter={`(${novaActUpdates.length})`}
                 description="Real-time Nova Act automation updates"
               >
@@ -491,7 +492,7 @@ const OrderDetails = ({ addNotification }) => {
               </Header>
             }
           >
-            <div style={{ 
+            <div style={{
               maxHeight: '300px',
               overflowY: 'auto',
               padding: '0',
@@ -511,7 +512,7 @@ const OrderDetails = ({ addNotification }) => {
                     default: return '#6c757d';
                   }
                 };
-                
+
                 return (
                   <div
                     key={update.id}
@@ -521,19 +522,19 @@ const OrderDetails = ({ addNotification }) => {
                       fontSize: '13px'
                     }}
                   >
-                    <div style={{ 
-                      display: 'flex', 
-                      alignItems: 'center', 
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
                       gap: '8px',
                       marginBottom: '4px'
                     }}>
-                      <span style={{ 
+                      <span style={{
                         color: '#6c757d',
                         fontSize: '12px'
                       }}>
                         {timestamp}
                       </span>
-                      <span style={{ 
+                      <span style={{
                         color: getUpdateColor(update.update_type),
                         fontWeight: 'bold',
                         fontSize: '12px'
@@ -541,7 +542,7 @@ const OrderDetails = ({ addNotification }) => {
                         {update.update_type.replace('_', ' ').toUpperCase()}
                       </span>
                     </div>
-                    <div style={{ 
+                    <div style={{
                       color: '#495057',
                       marginLeft: '16px'
                     }}>
@@ -593,7 +594,7 @@ const OrderDetails = ({ addNotification }) => {
 
   const renderExecutionLogsTab = () => {
     const logs = order?.execution_logs || [];
-    
+
     return (
       <Table
         columnDefinitions={[
@@ -607,10 +608,10 @@ const OrderDetails = ({ addNotification }) => {
             id: 'level',
             header: 'Level',
             cell: item => (
-              <StatusIndicator 
-                type={item.level === 'ERROR' ? 'error' : 
-                     item.level === 'WARNING' ? 'warning' : 
-                     item.level === 'INFO' ? 'info' : 'success'}
+              <StatusIndicator
+                type={item.level === 'ERROR' ? 'error' :
+                  item.level === 'WARNING' ? 'warning' :
+                    item.level === 'INFO' ? 'info' : 'success'}
               >
                 {item.level}
               </StatusIndicator>
@@ -774,7 +775,7 @@ const OrderDetails = ({ addNotification }) => {
         variant="h1"
         actions={
           <SpaceBetween direction="horizontal" size="xs">
-            <Button 
+            <Button
               iconName="refresh"
               onClick={fetchOrder}
               loading={loading}
@@ -784,7 +785,7 @@ const OrderDetails = ({ addNotification }) => {
             {order?.status === 'processing' && order?.automation_method === 'strands' && (
               <>
                 {!manualControlEnabled ? (
-                  <Button 
+                  <Button
                     variant="normal"
                     iconName="settings"
                     onClick={handleTakeControl}
@@ -793,7 +794,7 @@ const OrderDetails = ({ addNotification }) => {
                     Take Control
                   </Button>
                 ) : (
-                  <Button 
+                  <Button
                     variant="primary"
                     iconName="play"
                     onClick={handleReleaseControl}
@@ -805,7 +806,7 @@ const OrderDetails = ({ addNotification }) => {
               </>
             )}
             {order?.status === 'requires_human' && order?.automation_method === 'nova_act' && (
-              <Button 
+              <Button
                 variant="primary"
                 iconName="play"
                 onClick={handleResumeNovaAct}
@@ -815,7 +816,7 @@ const OrderDetails = ({ addNotification }) => {
               </Button>
             )}
             {order?.status === 'pending' && (
-              <Button 
+              <Button
                 variant="normal"
                 onClick={() => setShowCancelModal(true)}
               >
@@ -839,7 +840,7 @@ const OrderDetails = ({ addNotification }) => {
       {/* Manual Control Status */}
       {manualControlEnabled && (
         <Alert type="info" header="Manual Control Active">
-          You have manual control of the browser. You can interact with the page directly. 
+          You have manual control of the browser. You can interact with the page directly.
           Click "Release Control" to return to automation.
         </Alert>
       )}
@@ -847,7 +848,7 @@ const OrderDetails = ({ addNotification }) => {
       {/* Nova Act CAPTCHA Status */}
       {order?.status === 'requires_human' && order?.automation_method === 'nova_act' && (
         <Alert type="warning" header="CAPTCHA Detected - Human Intervention Required">
-          Nova Act has encountered a CAPTCHA or security challenge that requires human intervention. 
+          Nova Act has encountered a CAPTCHA or security challenge that requires human intervention.
           Please use the Live Browser View to solve the CAPTCHA, then click "Resume Nova Act" to continue automation.
         </Alert>
       )}
@@ -900,11 +901,11 @@ const OrderDetails = ({ addNotification }) => {
         {/* Tab Content */}
         {activeTab === 'overview' && renderOverviewTab()}
         {activeTab === 'execution-logs' && renderExecutionLogsTab()}
-        
+
         {/* TEMPORARILY DISABLED - Screenshots Tab Content - Will be re-enabled later */}
         {/* {activeTab === 'screenshots' && renderScreenshotsTab()} */}
         {/* END TEMPORARILY DISABLED - Screenshots Tab Content */}
-        
+
         {activeTab === 'live-view' && (
           <LiveBrowserViewer
             orderId={order?.id}

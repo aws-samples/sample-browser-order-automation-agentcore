@@ -10,6 +10,8 @@ import asyncio
 import logging
 import signal
 import sys
+import csv
+import io
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 from contextlib import asynccontextmanager
@@ -23,6 +25,7 @@ from fastapi import (
     Response,
     File,
     UploadFile,
+    Form,
 )
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -62,6 +65,88 @@ def signal_handler(signum, frame):
     """Handle shutdown signals"""
     logger.info(f"Received signal {signum}, initiating graceful shutdown...")
     shutdown_event.set()
+    
+    # Start shutdown task with 5 second timeout
+    asyncio.create_task(perform_graceful_shutdown())
+
+
+async def perform_graceful_shutdown():
+    """Perform graceful shutdown with aggressive timeout"""
+    try:
+        logger.info("Starting graceful shutdown process...")
+        
+        # Give 2 seconds for graceful shutdown
+        logger.info("Starting 2-second graceful shutdown timer...")
+        await asyncio.sleep(0.05)  # Minimal delay
+        
+        # Run all cleanup tasks in parallel with aggressive timeouts
+        cleanup_tasks = []
+        
+        # Task 1: Stop order queue
+        async def stop_order_queue():
+            if 'order_queue' in globals() and order_queue:
+                try:
+                    logger.info("Stopping order queue...")
+                    await asyncio.wait_for(order_queue.stop(), timeout=0.5)
+                    logger.info("Order queue stopped")
+                except asyncio.TimeoutError:
+                    logger.warning("Order queue stop timed out")
+                except Exception as e:
+                    logger.error(f"Error stopping order queue: {e}")
+        
+        # Task 2: Cleanup browser sessions
+        async def cleanup_browser_sessions():
+            try:
+                from services.browser_service import get_browser_service
+                browser_service = get_browser_service()
+                logger.info("Cleaning up browser sessions...")
+                
+                loop = asyncio.get_event_loop()
+                await asyncio.wait_for(
+                    loop.run_in_executor(None, browser_service.cleanup_all_sessions),
+                    timeout=0.5
+                )
+                logger.info("Browser sessions cleaned up")
+            except asyncio.TimeoutError:
+                logger.warning("Browser cleanup timed out")
+            except Exception as e:
+                logger.error(f"Error cleaning up browser sessions: {e}")
+        
+        # Task 3: Close database connections
+        async def close_database():
+            if 'db_manager' in globals() and db_manager:
+                try:
+                    logger.info("Closing database connections...")
+                    loop = asyncio.get_event_loop()
+                    await asyncio.wait_for(
+                        loop.run_in_executor(None, db_manager.close),
+                        timeout=0.3
+                    )
+                    logger.info("Database connections closed")
+                except asyncio.TimeoutError:
+                    logger.warning("Database close timed out")
+                except Exception as e:
+                    logger.error(f"Error closing database: {e}")
+        
+        # Run all cleanup tasks in parallel with 1.5 second total timeout
+        cleanup_tasks = [stop_order_queue(), cleanup_browser_sessions(), close_database()]
+        try:
+            await asyncio.wait_for(asyncio.gather(*cleanup_tasks, return_exceptions=True), timeout=1.5)
+            logger.info("Parallel cleanup completed")
+        except asyncio.TimeoutError:
+            logger.warning("Parallel cleanup timed out, forcing shutdown")
+
+        logger.info("Graceful shutdown completed in 1.5 seconds, exiting...")
+        
+        # Force exit after cleanup
+        import os
+        os._exit(0)
+        
+    except Exception as e:
+        logger.error(f"Error during graceful shutdown: {e}")
+        # Force exit even if cleanup fails
+        import os
+        os._exit(1)
 
 
 # Register signal handlers
@@ -143,7 +228,7 @@ class PaymentInfo(BaseModel):
 class CreateOrderRequest(BaseModel):
     retailer: str
     automation_method: str
-    ai_model: Optional[str] = "us.anthropic.claude-sonnet-4-20250514-v1:0"
+    ai_model: Optional[str] = None
     product: ProductInfo
     customer_name: str
     customer_email: str
@@ -360,11 +445,19 @@ async def create_order(request: CreateOrderRequest, background_tasks: Background
             else f'tok_demo_{datetime.now().strftime("%Y%m%d_%H%M%S")}'
         )
 
+        # Set default AI model if not provided
+        ai_model = request.ai_model
+        if not ai_model:
+            if request.automation_method == "nova_act":
+                ai_model = "nova_act"
+            else:  # strands
+                ai_model = "us.anthropic.claude-sonnet-4-20250514-v1:0"
+
         # Create order
         order_id = await order_queue.add_order(
             retailer=request.retailer,
             automation_method=request.automation_method,
-            ai_model=request.ai_model,
+            ai_model=ai_model,
             product_name=request.product.name,
             product_url=request.product.url,
             customer_name=request.customer_name,
@@ -397,13 +490,13 @@ async def create_order(request: CreateOrderRequest, background_tasks: Background
 
 @app.get("/api/orders")
 async def get_orders(
-    limit: int = 50, status: Optional[str] = None, retailer: Optional[str] = None
+    status: Optional[str] = None, retailer: Optional[str] = None
 ):
     """Get orders with optional filtering"""
     try:
         status_filter = [status] if status else None
         orders = db_manager.get_all_orders(
-            limit=limit, status_filter=status_filter, retailer_filter=retailer
+            status_filter=status_filter, retailer_filter=retailer
         )
 
         return {"orders": [order.to_dict() for order in orders], "total": len(orders)}
@@ -1310,61 +1403,156 @@ async def cancel_order(order_id: str):
 @app.delete("/api/orders/{order_id}/force")
 async def force_delete_order(order_id: str):
     """Force delete an order regardless of status"""
+    cleanup_errors = []
+    
+    # Set overall timeout for the entire operation
+    try:
+        return await asyncio.wait_for(_force_delete_order_impl(order_id), timeout=10.0)
+    except asyncio.TimeoutError:
+        logger.error(f"Force delete timed out for order {order_id}")
+        raise HTTPException(status_code=500, detail="Force delete operation timed out")
+    except Exception as e:
+        logger.error(f"Critical error during force delete of order {order_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Force delete failed: {str(e)}")
+
+
+async def _force_delete_order_impl(order_id: str):
+    """Implementation of force delete with timeout protection"""
+    cleanup_errors = []
+    
     try:
         # Get order first to check if it exists
         order = db_manager.get_order(order_id)
         if not order:
             raise HTTPException(status_code=404, detail="Order not found")
 
-        # Force stop any running automation
+        logger.info(f"Starting force delete for order {order_id}")
+
+        # Step 1: Aggressively force stop any running automation
         if order_id in order_queue.processing_orders:
             try:
                 task = order_queue.processing_orders[order_id]
                 if not task.done():
+                    # Cancel the task
                     task.cancel()
                     logger.info(f"Cancelled running task for order {order_id}")
+                    
+                    # Wait for cancellation with timeout
+                    try:
+                        await asyncio.wait_for(task, timeout=3.0)
+                        logger.info(f"Task for order {order_id} cancelled successfully")
+                    except asyncio.CancelledError:
+                        logger.info(f"Task for order {order_id} was cancelled")
+                    except asyncio.TimeoutError:
+                        logger.warning(f"Task for order {order_id} did not respond to cancellation within 3 seconds")
+                    except Exception as task_error:
+                        logger.warning(f"Task cleanup error for {order_id}: {task_error}")
+                        
+                # Force remove from processing orders immediately
+                if order_id in order_queue.processing_orders:
+                    del order_queue.processing_orders[order_id]
+                    logger.info(f"Forcibly removed {order_id} from processing_orders")
+                        
             except Exception as e:
+                cleanup_errors.append(f"Task cancellation: {str(e)}")
                 logger.warning(f"Failed to cancel task for order {order_id}: {e}")
+                
+                # Still try to remove from processing orders even if cancellation failed
+                try:
+                    if order_id in order_queue.processing_orders:
+                        del order_queue.processing_orders[order_id]
+                        logger.info(f"Forcibly removed {order_id} from processing_orders after cancellation failure")
+                except Exception as remove_error:
+                    logger.warning(f"Failed to remove {order_id} from processing_orders: {remove_error}")
 
-        # Clean up browser session if exists
+        # Step 2: Clean up browser session with multiple attempts
+        browser_cleanup_success = False
+        for attempt in range(2):
+            try:
+                from services.browser_service import get_browser_service
+
+                # Try both strands and nova_act configs
+                for method in ["strands", "nova_act"]:
+                    try:
+                        config = get_settings_service().get_automation_config(method)
+                        if config:
+                            browser_service = get_browser_service(config, db_manager)
+                            browser_service.cleanup_session(order_id, force=True)
+                            logger.info(f"Cleaned up browser session for order {order_id} (method: {method})")
+                            browser_cleanup_success = True
+                            break
+                    except Exception as method_error:
+                        logger.debug(f"Browser cleanup failed for {method}: {method_error}")
+                        continue
+                        
+                if browser_cleanup_success:
+                    break
+                    
+            except Exception as e:
+                cleanup_errors.append(f"Browser cleanup attempt {attempt + 1}: {str(e)}")
+                logger.warning(f"Browser cleanup attempt {attempt + 1} failed for order {order_id}: {e}")
+                if attempt == 0:
+                    await asyncio.sleep(0.5)  # Brief pause before retry
+
+        # Step 3: Clean up remaining queue data structures
+
         try:
-            from services.browser_service import get_browser_service
-
-            config = get_settings_service().get_automation_config("strands")
-            if config:
-                browser_service = get_browser_service(config, db_manager)
-                browser_service.cleanup_session(order_id, force=True)
-                logger.info(f"Cleaned up browser session for order {order_id}")
+            if order_id in order_queue.active_agents:
+                agent = order_queue.active_agents[order_id]
+                # Try to cleanup agent gracefully with timeout
+                if hasattr(agent, 'cleanup'):
+                    try:
+                        # Use asyncio.wait_for with short timeout for agent cleanup
+                        await asyncio.wait_for(agent.cleanup(), timeout=1.0)
+                    except asyncio.TimeoutError:
+                        logger.warning(f"Agent cleanup timed out for {order_id}")
+                    except Exception as agent_cleanup_error:
+                        logger.warning(f"Agent cleanup error: {agent_cleanup_error}")
+                
+                # Always remove from active_agents regardless of cleanup success
+                del order_queue.active_agents[order_id]
+                logger.debug(f"Removed {order_id} from active_agents")
         except Exception as e:
-            logger.warning(
-                f"Failed to cleanup browser session for order {order_id}: {e}"
-            )
+            cleanup_errors.append(f"Active agents cleanup: {str(e)}")
+            logger.warning(f"Failed to remove {order_id} from active_agents: {e}")
 
-        # Remove from processing orders
-        if order_id in order_queue.processing_orders:
-            del order_queue.processing_orders[order_id]
+        # Step 4: Delete from database
+        try:
+            success = db_manager.delete_order(order_id)
+            if not success:
+                raise HTTPException(
+                    status_code=500, detail="Failed to delete order from database"
+                )
+            logger.info(f"Deleted order {order_id} from database")
+        except Exception as e:
+            logger.error(f"Database deletion failed for {order_id}: {e}")
+            raise HTTPException(status_code=500, detail=f"Database deletion failed: {str(e)}")
 
-        # Remove from active agents
-        if order_id in order_queue.active_agents:
-            del order_queue.active_agents[order_id]
+        # Step 5: Broadcast deletion (non-critical)
+        try:
+            await broadcast_update({"type": "order_deleted", "order_id": order_id})
+        except Exception as e:
+            cleanup_errors.append(f"Broadcast: {str(e)}")
+            logger.warning(f"Failed to broadcast deletion for {order_id}: {e}")
 
-        # Delete from database
-        success = db_manager.delete_order(order_id)
-        if not success:
-            raise HTTPException(
-                status_code=500, detail="Failed to delete order from database"
-            )
-
-        # Broadcast deletion
-        await broadcast_update({"type": "order_deleted", "order_id": order_id})
-
-        return {"message": f"Order {order_id} force deleted successfully"}
+        # Log cleanup summary
+        if cleanup_errors:
+            logger.warning(f"Order {order_id} deleted with cleanup errors: {cleanup_errors}")
+            return {
+                "message": f"Order {order_id} force deleted successfully", 
+                "cleanup_warnings": cleanup_errors
+            }
+        else:
+            logger.info(f"Order {order_id} force deleted successfully with clean cleanup")
+            return {"message": f"Order {order_id} force deleted successfully"}
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to force delete order {order_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Critical error during force delete of order {order_id}: {e}")
+        import traceback
+        logger.error(f"Full traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Force delete failed: {str(e)}")
 
 
 @app.delete("/api/orders/cleanup/completed")
@@ -1380,129 +1568,6 @@ async def delete_completed_orders():
 
     except Exception as e:
         logger.error(f"Failed to delete completed orders: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/orders/upload-csv")
-async def upload_orders_csv(
-    file: UploadFile = File(...), background_tasks: BackgroundTasks = BackgroundTasks()
-):
-    """Upload CSV file to create multiple orders"""
-    try:
-        if not file.filename.endswith(".csv"):
-            raise HTTPException(status_code=400, detail="File must be a CSV")
-
-        # Read CSV content
-        content = await file.read()
-        csv_content = content.decode("utf-8")
-
-        # Parse CSV
-        import csv
-        import io
-
-        csv_reader = csv.DictReader(io.StringIO(csv_content))
-        created_orders = []
-
-        for row in csv_reader:
-            try:
-                # Create order from CSV row
-                order_data = {
-                    "customer_name": row.get("customer_name", "Demo Customer").strip(),
-                    "customer_email": row.get(
-                        "customer_email", "demo@example.com"
-                    ).strip(),
-                    "retailer": row.get("retailer", "farfetch").strip(),
-                    "automation_method": row.get(
-                        "automation_method", "strands"
-                    ).strip(),
-                    "ai_model": row.get(
-                        "ai_model", "us.anthropic.claude-sonnet-4-20250514-v1:0"
-                    ).strip(),
-                    "product": {
-                        "url": row.get(
-                            "product_url", row.get("curateditem_url", "")
-                        ).strip(),
-                        "name": row.get("product_name", row.get("name", "")).strip(),
-                        "size": row.get("size", "").strip() or None,
-                        "color": row.get("color", "").strip() or None,
-                        "quantity": int(row.get("quantity", 1)),
-                        "price": (
-                            float(row.get("price", 0))
-                            if row.get("price", "").strip()
-                            else None
-                        ),
-                    },
-                    "shipping_address": {
-                        "first_name": row.get("shipping_first_name", "Demo").strip(),
-                        "last_name": row.get("shipping_last_name", "Customer").strip(),
-                        "address_line_1": row.get(
-                            "shipping_address_1", "123 Main St"
-                        ).strip(),
-                        "address_line_2": row.get("shipping_address_2", "").strip()
-                        or None,
-                        "city": row.get("shipping_city", "New York").strip(),
-                        "state": row.get("shipping_state", "NY").strip(),
-                        "postal_code": row.get("shipping_postal_code", "10001").strip(),
-                        "country": row.get("shipping_country", "US").strip(),
-                    },
-                    "payment_info": {
-                        "payment_token": row.get(
-                            "payment_token",
-                            f'tok_demo_{datetime.now().strftime("%Y%m%d_%H%M%S")}',
-                        ).strip(),
-                        "cardholder_name": row.get(
-                            "cardholder_name",
-                            row.get("customer_name", "Demo Customer"),
-                        ).strip(),
-                    },
-                    "priority": row.get("priority", "normal").strip(),
-                    "instructions": row.get("instructions", "").strip() or None,
-                }
-
-                # Validate required fields (skip validation if defaults are used)
-                required_product_fields = ["url", "name"]
-                for field in required_product_fields:
-                    if not order_data["product"].get(field):
-                        raise ValueError(f"Missing required product field: {field}")
-
-                # Convert priority
-                try:
-                    priority = OrderPriority(order_data["priority"].upper())
-                except ValueError:
-                    priority = OrderPriority.NORMAL
-
-                # Create order
-                order_id = await order_queue.add_order(
-                    retailer=order_data["retailer"],
-                    automation_method=order_data["automation_method"],
-                    ai_model=order_data["ai_model"],
-                    product_name=order_data["product"]["name"],
-                    product_url=order_data["product"]["url"],
-                    customer_name=order_data["customer_name"],
-                    customer_email=order_data["customer_email"],
-                    shipping_address=order_data["shipping_address"],
-                    product_size=order_data["product"]["size"],
-                    product_color=order_data["product"]["color"],
-                    product_price=order_data["product"]["price"],
-                    payment_token=order_data["payment_info"]["payment_token"],
-                    priority=priority,
-                    instructions=order_data["instructions"],
-                )
-
-                created_orders.append(order_id)
-
-            except Exception as e:
-                logger.error(f"Failed to create order from CSV row: {e}")
-                continue
-
-        return {
-            "message": f"Created {len(created_orders)} orders from CSV",
-            "created_count": len(created_orders),
-            "order_ids": created_orders,
-        }
-
-    except Exception as e:
-        logger.error(f"Failed to upload CSV: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -2186,8 +2251,176 @@ async def save_settings_config(request: dict):
             return {"status": "success", "message": "No configuration provided"}
 
         result = settings_service.update_system_config(config_updates)
-        return result
+        
+        if result:
+            return {"status": "success", "message": "Configuration saved successfully"}
+        else:
+            return {"status": "error", "message": "Failed to save configuration"}
 
     except Exception as e:
         logger.error(f"Failed to save system config: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/orders/upload-csv")
+async def upload_orders_csv(
+    file: UploadFile = File(...), 
+    automation_method: str = Form("nova_act"),
+    ai_model: str = Form("nova_act"),
+    background_tasks: BackgroundTasks = None
+):
+    """Upload CSV file and create multiple orders"""
+    try:
+        # Validate file type
+        if not file.filename.lower().endswith(".csv"):
+            raise HTTPException(status_code=400, detail="File must be a CSV file")
+
+        # Read CSV content
+        content = await file.read()
+        csv_content = content.decode("utf-8")
+
+        # Parse CSV
+        csv_reader = csv.DictReader(io.StringIO(csv_content))
+
+        created_orders = []
+        errors = []
+
+        # Process each row
+        for row_num, row in enumerate(
+            csv_reader, start=2
+        ):  # Start at 2 because row 1 is header
+            try:
+                # Map CSV columns to order fields
+                # Expected CSV format: name,brand,description,color,size,price,curateditem_url
+                product_name = row.get("name", "").strip()
+                brand = row.get("brand", "").strip()
+                description = row.get("description", "").strip()
+                color = row.get("color", "").strip()
+                size = row.get("size", "").strip()
+                price_str = row.get("price", "").strip()
+                product_url = row.get("curateditem_url", "").strip()
+
+                # Validate required fields
+                if not product_name:
+                    errors.append(f"Row {row_num}: Missing product name")
+                    continue
+
+                if not product_url:
+                    errors.append(f"Row {row_num}: Missing product URL")
+                    continue
+
+                # Parse price
+                try:
+                    price = float(price_str) if price_str else None
+                except ValueError:
+                    price = None
+
+                # Create full product name with brand if available
+                full_product_name = (
+                    f"{brand} {product_name}".strip() if brand else product_name
+                )
+
+                # Determine retailer from URL (handle affiliate links)
+                retailer = "unknown"
+                url_lower = product_url.lower()
+                
+                # Check for direct domain matches first
+                if "order.sanghwa.people.aws.dev/shop" in url_lower:
+                    retailer = "ShopZone"
+                elif "neimanmarcus.com" in url_lower:
+                    retailer = "neiman_marcus"
+                elif "net-a-porter.com" in url_lower:
+                    retailer = "net_a_porter"
+                elif "mytheresa.com" in url_lower:
+                    retailer = "mytheresa"
+                elif "amazon.com" in url_lower:
+                    retailer = "amazon"
+                elif "farfetch.com" in url_lower:
+                    retailer = "farfetch"
+                # Handle affiliate links that contain the actual retailer in the URL
+                elif "murl=" in url_lower:
+                    # Extract the actual URL from affiliate link
+                    import urllib.parse
+                    if "murl=" in url_lower:
+                        try:
+                            # Find murl parameter and decode it
+                            murl_start = url_lower.find("murl=") + 5
+                            murl_end = url_lower.find("&", murl_start)
+                            if murl_end == -1:
+                                murl_end = len(url_lower)
+                            encoded_url = product_url[murl_start:murl_end]
+                            decoded_url = urllib.parse.unquote(encoded_url).lower()
+                            
+                            if "neimanmarcus.com" in decoded_url:
+                                retailer = "neiman_marcus"
+                            elif "net-a-porter.com" in decoded_url:
+                                retailer = "net_a_porter"
+                            elif "mytheresa.com" in decoded_url:
+                                retailer = "mytheresa"
+                            elif "farfetch.com" in decoded_url:
+                                retailer = "farfetch"
+                        except Exception:
+                            pass
+                # Handle other affiliate patterns
+                elif ("jdoqocy.com" in url_lower or "dpbolvw.net" in url_lower) and "mytheresa.com" in url_lower:
+                    retailer = "mytheresa"
+
+                # Create order with provided settings
+                order_id = await order_queue.add_order(
+                    retailer=retailer,
+                    automation_method=automation_method,
+                    ai_model=ai_model,
+                    product_name=full_product_name,
+                    product_url=product_url,
+                    customer_name="CSV Import Customer",
+                    customer_email="csv-import@example.com",
+                    shipping_address={
+                        "first_name": "CSV",
+                        "last_name": "Import",
+                        "address_line_1": "123 Import Street",
+                        "city": "Import City",
+                        "state": "CA",
+                        "postal_code": "90210",
+                        "country": "US",
+                    },
+                    product_size=size if size else None,
+                    product_color=color if color else None,
+                    product_price=price,
+                    payment_token=f'tok_csv_import_{datetime.now().strftime("%Y%m%d_%H%M%S")}_{row_num}',
+                    priority=OrderPriority.NORMAL,
+                    instructions=(
+                        f"Imported from CSV. Description: {description}"
+                        if description
+                        else "Imported from CSV"
+                    ),
+                )
+
+                created_orders.append(order_id)
+
+            except Exception as row_error:
+                errors.append(f"Row {row_num}: {str(row_error)}")
+                logger.error(f"Error processing CSV row {row_num}: {row_error}")
+
+        # Broadcast update about bulk order creation
+        if created_orders:
+            await broadcast_update(
+                {
+                    "type": "bulk_orders_created",
+                    "count": len(created_orders),
+                    "order_ids": created_orders,
+                }
+            )
+
+        return {
+            "success": True,
+            "created_count": len(created_orders),
+            "error_count": len(errors),
+            "created_orders": created_orders,
+            "errors": errors[:10],  # Limit errors to first 10 to avoid huge responses
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to process CSV upload: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to process CSV: {str(e)}")

@@ -771,7 +771,11 @@ class BrowserService:
             session_id: Session ID to cleanup
             force: Force cleanup even if session is protected (requires_human status)
         """
+        cleanup_errors = []
+        
         try:
+            logger.info(f"Starting cleanup for session {session_id} (force={force})")
+            
             # Check if session should be protected from cleanup
             if not force and self.db_manager:
                 try:
@@ -786,55 +790,93 @@ class BrowserService:
                         f"Could not check order status for session {session_id}: {e}"
                     )
 
-            with self.session_lock:
-                # Clean up session
-                if session_id in self.active_sessions:
-                    session = self.active_sessions[session_id]
+            # Use timeout for the entire cleanup operation
+            try:
+                with self.session_lock:
+                    # Clean up session
+                    if session_id in self.active_sessions:
+                        session = self.active_sessions[session_id]
+                        logger.debug(f"Found active session {session_id} for cleanup")
 
-                    # Clean up Playwright resources
-                    async def cleanup_playwright():
+                        # Clean up Playwright resources with timeout
+                        async def cleanup_playwright():
+                            cleanup_tasks = []
+                            
+                            try:
+                                if hasattr(session, "browser") and session.browser:
+                                    try:
+                                        await asyncio.wait_for(session.browser.close(), timeout=3.0)
+                                        logger.info(f"Closed Playwright browser for session {session_id}")
+                                    except asyncio.TimeoutError:
+                                        logger.warning(f"Browser close timed out for session {session_id}")
+                                    except Exception as e:
+                                        logger.warning(f"Error closing browser: {e}")
+                                        
+                                if hasattr(session, "playwright") and session.playwright:
+                                    try:
+                                        await asyncio.wait_for(session.playwright.stop(), timeout=3.0)
+                                        logger.info(f"Stopped Playwright for session {session_id}")
+                                    except asyncio.TimeoutError:
+                                        logger.warning(f"Playwright stop timed out for session {session_id}")
+                                    except Exception as e:
+                                        logger.warning(f"Error stopping playwright: {e}")
+                                        
+                            except Exception as e:
+                                logger.warning(f"Error in Playwright cleanup: {e}")
+
+                        # Run Playwright cleanup with timeout
                         try:
-                            if hasattr(session, "browser") and session.browser:
-                                await session.browser.close()
-                                logger.info(
-                                    f"Closed Playwright browser for session {session_id}"
-                                )
-                            if hasattr(session, "playwright") and session.playwright:
-                                await session.playwright.stop()
-                                logger.info(
-                                    f"Stopped Playwright for session {session_id}"
-                                )
+                            # Simple approach - just run the cleanup
+                            asyncio.run(cleanup_playwright())
                         except Exception as e:
-                            logger.warning(
-                                f"Error cleaning up Playwright resources: {e}"
-                            )
+                            cleanup_errors.append(f"Playwright cleanup error: {str(e)}")
+                            logger.warning(f"Failed to run Playwright cleanup: {e}")
 
-                    # Run Playwright cleanup
+                        # Clean up browser client with timeout
+                        try:
+                            if hasattr(session, 'browser_client') and session.browser_client:
+                                if hasattr(session.browser_client, "stop"):
+                                    session.browser_client.stop()
+                                logger.debug(f"Stopped browser client for session {session_id}")
+                            session.status = "terminated"
+                        except Exception as e:
+                            cleanup_errors.append(f"Browser client cleanup: {str(e)}")
+                            logger.warning(f"Error stopping browser client for session {session_id}: {e}")
+
+                        # Remove from active sessions
+                        try:
+                            del self.active_sessions[session_id]
+                            logger.info(f"Removed session {session_id} from active_sessions")
+                        except KeyError:
+                            logger.debug(f"Session {session_id} was not in active_sessions")
+                        except Exception as e:
+                            cleanup_errors.append(f"Session removal: {str(e)}")
+                            logger.warning(f"Error removing session {session_id}: {e}")
+
+                    # Clean up client
                     try:
-                        asyncio.run(cleanup_playwright())
+                        if session_id in self.active_clients:
+                            del self.active_clients[session_id]
+                            logger.info(f"Cleaned up browser client: {session_id}")
                     except Exception as e:
-                        logger.warning(f"Failed to run Playwright cleanup: {e}")
+                        cleanup_errors.append(f"Client cleanup: {str(e)}")
+                        logger.warning(f"Error cleaning up client {session_id}: {e}")
 
-                    # Clean up browser client
-                    try:
-                        if hasattr(session.browser_client, "stop"):
-                            session.browser_client.stop()
-                        session.status = "terminated"
-                    except Exception as e:
-                        logger.warning(
-                            f"Error stopping browser client for session {session_id}: {e}"
-                        )
+            except Exception as lock_error:
+                cleanup_errors.append(f"Lock error: {str(lock_error)}")
+                logger.error(f"Error during locked cleanup for session {session_id}: {lock_error}")
 
-                    del self.active_sessions[session_id]
-                    logger.info(f"Cleaned up enhanced browser session: {session_id}")
-
-                # Clean up client
-                if session_id in self.active_clients:
-                    del self.active_clients[session_id]
-                    logger.info(f"Cleaned up browser client: {session_id}")
+            # Log cleanup summary
+            if cleanup_errors:
+                logger.warning(f"Session {session_id} cleanup completed with errors: {cleanup_errors}")
+            else:
+                logger.info(f"Session {session_id} cleanup completed successfully")
 
         except Exception as e:
-            logger.error(f"Failed to cleanup session {session_id}: {e}")
+            logger.error(f"Critical error during cleanup of session {session_id}: {e}")
+            import traceback
+            logger.error(f"Full traceback: {traceback.format_exc()}")
+            # Don't re-raise - we want cleanup to be as robust as possible
 
     def list_sessions(self) -> Dict[str, Dict[str, Any]]:
         """List all active sessions"""

@@ -571,7 +571,6 @@ class DatabaseManager:
 
     def get_all_orders(
         self,
-        limit: int = 50,
         status_filter: List[str] = None,
         retailer_filter: str = None,
     ) -> List[Order]:
@@ -586,7 +585,7 @@ class DatabaseManager:
                 if retailer_filter:
                     query = query.filter(OrderModel.retailer == retailer_filter)
 
-                query = query.order_by(OrderModel.created_at.desc()).limit(limit)
+                query = query.order_by(OrderModel.created_at.desc())
                 order_models = query.all()
 
                 return [
@@ -594,7 +593,7 @@ class DatabaseManager:
                 ]
         except Exception as e:
             logger.error(f"DatabaseManager.get_all_orders() failed: {e}")
-            logger.error(f"Parameters: limit={limit}, status_filter={status_filter}")
+            logger.error(f"Parameters: status_filter={status_filter}, retailer_filter={retailer_filter}")
             import traceback
 
             logger.error(f"Full traceback: {traceback.format_exc()}")

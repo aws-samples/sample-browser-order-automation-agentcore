@@ -24,8 +24,9 @@ import ReviewQueue from './pages/ReviewQueue';
 import FailedOrders from './pages/FailedOrders';
 import OrderDetails from './pages/OrderDetails';
 import CreateOrder from './pages/CreateOrder';
+import BatchUpload from './pages/BatchUpload';
 import SecretVault from './pages/SecretVault';
-import MockShop from './pages/MockShop';
+// MockShop removed - using static HTML files
 
 function AppContent() {
   const [navigationOpen, setNavigationOpen] = useState(true);
@@ -392,6 +393,7 @@ function AppContent() {
         <Route path="/" element={<OrderDashboard addNotification={addNotification} />} />
         <Route path="/dashboard" element={<OrderDashboard addNotification={addNotification} />} />
         <Route path="/orders/create" element={<CreateOrder addNotification={addNotification} />} />
+        <Route path="/orders/batch-upload" element={<BatchUpload addNotification={addNotification} />} />
         <Route path="/orders/:orderId" element={<OrderDetails addNotification={addNotification} />} />
 
         <Route path="/review" element={<ReviewQueue addNotification={addNotification} />} />
@@ -460,7 +462,7 @@ function App() {
   return (
     <Router>
       <Routes>
-        <Route path="/shop" element={<MockShop />} />
+        <Route path="/shop" element={<div>Redirecting to shop...</div>} />
         <Route path="*" element={<AppContent />} />
       </Routes>
     </Router>

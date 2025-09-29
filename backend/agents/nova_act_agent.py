@@ -73,6 +73,7 @@ class NovaActAgent:
         self.strands_agent = None
         self.worker = None
         self.worker_session_id = None
+        self._is_processing = False
 
         # Get config from DB via ConfigManager
         self.config_manager = get_config_manager(db_manager)
@@ -456,16 +457,18 @@ class NovaActAgent:
                         else ""
                     )
 
-            # Run Nova Act resume in thread pool
-            import concurrent.futures
-
-            loop = asyncio.get_event_loop()
-
+            # Run Nova Act resume in thread pool with improved resource management
+            executor = None
             try:
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                    future = loop.run_in_executor(executor, execute_nova_act_resume)
+                import concurrent.futures
+                executor = concurrent.futures.ThreadPoolExecutor(
+                    max_workers=1, 
+                    thread_name_prefix=f"nova-act-resume-{self.session_id[:8]}"
+                )
+                future = executor.submit(execute_nova_act_resume)
+                try:
                     result_tuple = await asyncio.wait_for(
-                        future, timeout=300.0
+                        asyncio.wrap_future(future), timeout=300.0
                     )  # 5 minute timeout
 
                     if isinstance(result_tuple, tuple):
@@ -476,13 +479,14 @@ class NovaActAgent:
                     else:
                         result = result_tuple
 
-            except asyncio.TimeoutError:
-                self._add_log(
-                    "ERROR",
-                    "Nova Act resume execution timed out after 5 minutes",
-                    "captcha_resume",
-                )
-                result = "FAILED: Nova Act resume automation timed out after 5 minutes."
+                except asyncio.TimeoutError:
+                    self._add_log(
+                        "ERROR",
+                        "Nova Act resume execution timed out after 5 minutes",
+                        "captcha_resume",
+                    )
+                    future.cancel()
+                    result = "FAILED: Nova Act resume automation timed out after 5 minutes."
 
             except Exception as exec_error:
                 self._add_log(
@@ -491,6 +495,9 @@ class NovaActAgent:
                     "captcha_resume",
                 )
                 result = f"FAILED: Resume thread execution error: {exec_error}"
+            finally:
+                if executor:
+                    executor.shutdown(wait=False)
 
             self._add_log(
                 "INFO",
@@ -917,6 +924,16 @@ class NovaActAgent:
 
     async def process_order(self, order, progress_callback=None) -> Dict[str, Any]:
         """Process order using Nova Act with worker process"""
+        # Prevent concurrent processing
+        if self._is_processing:
+            return {
+                "success": False,
+                "status": "failed",
+                "error": "Another order is already being processed",
+                "automation_method": "nova_act",
+            }
+        
+        self._is_processing = True
         try:
             order_id = order.id
             self._add_log(
@@ -944,6 +961,8 @@ class NovaActAgent:
                 "error": str(e),
                 "automation_method": "nova_act",
             }
+        finally:
+            self._is_processing = False
 
     async def _process_order_with_worker(
         self, order, progress_callback=None
@@ -1370,18 +1389,18 @@ class NovaActAgent:
                         else ""
                     )
 
-            # Run Nova Act in thread pool to avoid blocking and thread conflicts
-            import concurrent.futures
-
-            loop = asyncio.get_event_loop()
-
+            # Run Nova Act in thread pool with improved resource management
+            executor = None
             try:
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                    future = loop.run_in_executor(
-                        executor, execute_nova_act_same_thread
-                    )
+                import concurrent.futures
+                executor = concurrent.futures.ThreadPoolExecutor(
+                    max_workers=1, 
+                    thread_name_prefix=f"nova-act-{self.session_id[:8]}"
+                )
+                future = executor.submit(execute_nova_act_same_thread)
+                try:
                     result_tuple = await asyncio.wait_for(
-                        future, timeout=300.0
+                        asyncio.wrap_future(future), timeout=300.0
                     )  # 5 minute timeout
 
                     if isinstance(result_tuple, tuple):
@@ -1392,21 +1411,20 @@ class NovaActAgent:
                     else:
                         result = result_tuple
 
-            except asyncio.TimeoutError:
-                self._add_log(
-                    "ERROR",
-                    "Nova Act execution timed out after 5 minutes",
-                    "automation_execution",
-                )
-                result = "FAILED: Nova Act automation timed out after 5 minutes."
-
-            except Exception as exec_error:
-                self._add_log(
-                    "ERROR",
-                    f"Thread execution failed: {exec_error}",
-                    "automation_execution",
-                )
-                result = f"FAILED: Thread execution error: {exec_error}"
+                except asyncio.TimeoutError:
+                    self._add_log(
+                        "ERROR",
+                        "Nova Act execution timed out after 5 minutes",
+                        "automation_execution",
+                    )
+                    future.cancel()
+                    result = "FAILED: Nova Act automation timed out after 5 minutes."
+            except Exception as e:
+                self._add_log("ERROR", f"Thread execution error: {e}", "automation_execution")
+                result = f"FAILED: Thread execution error: {e}"
+            finally:
+                if executor:
+                    executor.shutdown(wait=False)
 
             self._add_log(
                 "INFO",
@@ -1508,37 +1526,95 @@ class NovaActAgent:
             }
 
     async def cleanup(self, force: bool = False):
-        """Clean up resources"""
+        """Clean up resources with improved memory management"""
+        cleanup_errors = []
         try:
-            # Clean up worker session if available
+            self._add_log("INFO", f"Cleaning up Nova Act session {self.session_id}", "cleanup")
+
+            # Clean up worker session if available (with timeout)
             if self.worker and self.worker_session_id:
                 try:
-                    await self.worker.stop_session(self.worker_session_id)
+                    await asyncio.wait_for(
+                        self.worker.stop_session(self.worker_session_id), 
+                        timeout=3.0
+                    )
                     self._add_log("INFO", "Nova Act worker session stopped", "cleanup")
+                except asyncio.TimeoutError:
+                    cleanup_errors.append("Worker session stop timed out")
                 except Exception as e:
-                    logger.warning(f"Failed to stop worker session: {e}")
+                    cleanup_errors.append(f"Worker session cleanup: {e}")
 
-            # Clean up Strands agent
-            self.strands_agent = None
+            # Clean up Strands agent first (releases model resources)
+            if self.strands_agent:
+                try:
+                    self.strands_agent = None
+                    self._add_log("INFO", "Strands agent cleared", "cleanup")
+                except Exception as e:
+                    cleanup_errors.append(f"Strands agent cleanup: {e}")
 
             # Clean up Nova Act resources
             if hasattr(self, "nova_session"):
-                self.nova_session = None
-                logger.info("Nova Act session reference cleared")
+                try:
+                    self.nova_session = None
+                    self._add_log("INFO", "Nova Act session reference cleared", "cleanup")
+                except Exception as e:
+                    cleanup_errors.append(f"Nova Act session cleanup: {e}")
 
-            # AWS managed browser (aws.browser.v1) doesn't need manual cleanup
-
-            # Clean up AgentCore context
+            # Clean up AgentCore context with timeout
             if hasattr(self, "agentcore_context") and self.agentcore_context:
                 try:
-                    self.agentcore_context.__exit__(None, None, None)
+                    def cleanup_context():
+                        try:
+                            self.agentcore_context.__exit__(None, None, None)
+                        except Exception as e:
+                            return str(e)
+                        return None
+                    
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                        future = executor.submit(cleanup_context)
+                        try:
+                            error = await asyncio.wait_for(asyncio.wrap_future(future), timeout=3.0)
+                            if error:
+                                cleanup_errors.append(f"AgentCore context cleanup: {error}")
+                            else:
+                                self._add_log("INFO", "AgentCore context cleaned up", "cleanup")
+                        except asyncio.TimeoutError:
+                            cleanup_errors.append("AgentCore context cleanup timed out")
+                            future.cancel()
                 except Exception as e:
-                    logger.warning(f"Error cleaning up AgentCore context: {e}")
+                    cleanup_errors.append(f"AgentCore context cleanup error: {e}")
                 finally:
                     self.agentcore_context = None
 
             # Clean up AgentCore client
             if hasattr(self, "agentcore_client") and self.agentcore_client:
+                try:
+                    self.agentcore_client.stop()
+                    self.agentcore_client = None
+                    self._add_log("INFO", "AgentCore client stopped", "cleanup")
+                except Exception as e:
+                    cleanup_errors.append(f"AgentCore client cleanup: {e}")
+
+            # Reset processing flag
+            self._is_processing = False
+            
+            # Clear all references
+            self.session_id = None
+            self.worker_session_id = None
+            
+            if cleanup_errors:
+                error_msg = f"Cleanup completed with {len(cleanup_errors)} errors: {'; '.join(cleanup_errors)}"
+                self._add_log("WARNING", error_msg, "cleanup")
+                logger.warning(error_msg)
+            else:
+                logger.info("Nova Act Agent cleanup completed successfully")
+
+        except Exception as e:
+            error_msg = f"Critical cleanup error: {e}"
+            logger.error(error_msg)
+            if hasattr(self, '_add_log'):
+                self._add_log("ERROR", error_msg, "cleanup")
                 try:
                     self.agentcore_client.stop()
                     self.agentcore_client = None

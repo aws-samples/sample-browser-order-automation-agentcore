@@ -446,10 +446,7 @@
                 <div class="option-group">
                     <label class="option-label">Size:</label>
                     <div class="size-options" id="sizeOptions">
-                        <div class="size-option" onclick="selectSize(this, '128GB')">128GB</div>
-                        <div class="size-option" onclick="selectSize(this, '256GB')">256GB</div>
-                        <div class="size-option" onclick="selectSize(this, '512GB')">512GB</div>
-                        <div class="size-option" onclick="selectSize(this, '1TB')">1TB</div>
+                        <!-- Size options will be populated by JavaScript based on product -->
                     </div>
                 </div>
             </div>
@@ -512,7 +509,17 @@
             { id: 7, name: 'Kindle Paperwhite', price: 139, rating: 4.5, reviews: 8934, image: '📖', category: 'Electronics', prime: true, hasSize: true, hasColor: false },
             { id: 8, name: 'Dyson V15 Detect Vacuum', price: 749, rating: 4.4, reviews: 2156, image: '🧹', category: 'Home', prime: true, hasSize: false, hasColor: true },
             { id: 9, name: 'Levi\'s 501 Original Jeans', price: 59, rating: 4.2, reviews: 4523, image: '👖', category: 'Clothing', prime: false, hasSize: true, hasColor: true },
-            { id: 10, name: 'Echo Dot (5th Gen)', price: 49, rating: 4.3, reviews: 15672, image: '🔊', category: 'Electronics', prime: true, hasSize: false, hasColor: true }
+            { id: 10, name: 'Echo Dot (5th Gen)', price: 49, rating: 4.3, reviews: 15672, image: '🔊', category: 'Electronics', prime: true, hasSize: false, hasColor: true },
+            { id: 11, name: 'Fitbit Charge 6', price: 199, rating: 4.1, reviews: 3456, image: '⌚', category: 'Electronics', prime: true, hasSize: true, hasColor: true },
+            { id: 12, name: 'Ninja Foodi Air Fryer', price: 129, rating: 4.5, reviews: 6789, image: '🍟', category: 'Kitchen', prime: true, hasSize: false, hasColor: false },
+            { id: 13, name: 'Adidas Ultraboost 22', price: 180, rating: 4.3, reviews: 2341, image: '👟', category: 'Shoes', prime: false, hasSize: true, hasColor: true },
+            { id: 14, name: 'Ring Video Doorbell', price: 99, rating: 4.2, reviews: 8765, image: '🚪', category: 'Home', prime: true, hasSize: false, hasColor: false },
+            { id: 15, name: 'Patagonia Down Jacket', price: 299, rating: 4.6, reviews: 1234, image: '🧥', category: 'Clothing', prime: false, hasSize: true, hasColor: true },
+            { id: 16, name: 'iPad Air 5th Generation', price: 599, rating: 4.5, reviews: 2987, image: '📱', category: 'Electronics', prime: true, hasSize: true, hasColor: true },
+            { id: 17, name: 'KitchenAid Stand Mixer', price: 379, rating: 4.7, reviews: 5432, image: '🥧', category: 'Kitchen', prime: true, hasSize: false, hasColor: true },
+            { id: 18, name: 'The North Face Backpack', price: 89, rating: 4.4, reviews: 3456, image: '🎒', category: 'Outdoor', prime: false, hasSize: false, hasColor: true },
+            { id: 19, name: 'Bose SoundLink Flex', price: 149, rating: 4.3, reviews: 2876, image: '🔊', category: 'Electronics', prime: true, hasSize: false, hasColor: true },
+            { id: 20, name: 'Allbirds Tree Runners', price: 98, rating: 4.1, reviews: 4567, image: '👟', category: 'Shoes', prime: false, hasSize: true, hasColor: true }
         ];
 
         let currentProduct = null;
@@ -534,6 +541,38 @@
             
             updateCartCount();
         });
+
+        function populateSizeOptions(product) {
+            const sizeOptionsContainer = document.getElementById('sizeOptions');
+            let sizeOptions = [];
+            
+            // Define size options based on product category and name
+            if (product.name.includes('iPhone') || product.name.includes('iPad')) {
+                sizeOptions = ['128GB', '256GB', '512GB', '1TB'];
+            } else if (product.name.includes('MacBook')) {
+                sizeOptions = ['256GB', '512GB', '1TB', '2TB'];
+            } else if (product.name.includes('Kindle')) {
+                sizeOptions = ['8GB', '32GB'];
+            } else if (product.category === 'Shoes') {
+                sizeOptions = ['7', '8', '9', '10', '11', '12'];
+            } else if (product.category === 'Clothing') {
+                sizeOptions = ['S', 'M', 'L', 'XL'];
+            } else if (product.name.includes('Fitbit')) {
+                sizeOptions = ['Small', 'Large'];
+            } else {
+                // Default generic sizes
+                sizeOptions = ['Small', 'Medium', 'Large'];
+            }
+            
+            sizeOptionsContainer.innerHTML = '';
+            sizeOptions.forEach(size => {
+                const sizeElement = document.createElement('div');
+                sizeElement.className = 'size-option';
+                sizeElement.textContent = size;
+                sizeElement.onclick = () => selectSize(sizeElement, size);
+                sizeOptionsContainer.appendChild(sizeElement);
+            });
+        }
 
         function loadProduct(productId) {
             currentProduct = products.find(p => p.id === productId);
@@ -560,6 +599,7 @@
             // Show/hide size options
             if (currentProduct.hasSize) {
                 document.getElementById('sizeSection').style.display = 'block';
+                populateSizeOptions(currentProduct);
             }
 
             // Show/hide color options

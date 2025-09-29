@@ -26,6 +26,7 @@ class AgentConfig:
     processing_timeout: int
     execution_role_arn: str
     nova_act_api_key: str = ""
+    model: str = ""  # AI model override for this specific order
 
 
 class ConfigManager:
@@ -38,6 +39,7 @@ class ConfigManager:
         "session_replay_s3_prefix": "session-replays/",
         "browser_session_timeout": 3600,
         "max_concurrent_orders": 5,
+        "max_queue_size": 500,
         "default_model": "us.anthropic.claude-sonnet-4-20250514-v1:0",
         "nova_act_api_key": os.getenv("NOVA_ACT_API_KEY", ""),
         "execution_role_arn": "",

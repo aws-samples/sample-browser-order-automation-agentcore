@@ -274,9 +274,15 @@ const Settings = ({ addNotification }) => {
         body: JSON.stringify({ config: systemConfig })
       });
 
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`HTTP ${response.status}: ${errorText}`);
+      }
+
       const result = await response.json();
 
-      if (result.status === 'success') {
+      // Check for success - handle both status field and HTTP success
+      if (response.ok && (result.status === 'success' || !result.status)) {
         // 저장 성공 후 DB에서 최신 설정을 다시 로드하여 동기화
         const configResponse = await fetch('/api/settings/config');
         if (configResponse.ok) {
@@ -294,11 +300,7 @@ const Settings = ({ addNotification }) => {
           content: 'All configuration settings have been saved successfully'
         });
       } else {
-        addNotification({
-          type: 'error',
-          header: 'Save Failed',
-          content: result.message || 'Failed to save configuration'
-        });
+        throw new Error(result.message || result.detail || 'Failed to save configuration');
       }
 
     } catch (error) {
