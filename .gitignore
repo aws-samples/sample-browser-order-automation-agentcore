@@ -135,3 +135,6 @@ jspm_packages/
 # Temporary folders
 tmp/
 temp/
+
+# CSV files
+*.csv
