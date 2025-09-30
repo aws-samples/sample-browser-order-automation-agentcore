@@ -556,7 +556,7 @@ STEP 5: Proceed to checkout
                             try:
                                 self._add_log("INFO", f"Calling Strands agent (attempt {attempt + 1})", "automation")
                                 response = self.strands_agent(instruction)
-                                self._add_log("INFO", f"Strands agent responded: {str(response)[:100]}...", "automation")
+                                self._add_log("INFO", f"Strands agent responded: {str(response)}", "automation")
                                 return str(response)
                             except Exception as e:
                                 self._add_log("ERROR", f"Strands agent error (attempt {attempt + 1}): {e}", "automation")
@@ -620,7 +620,7 @@ STEP 5: Proceed to checkout
                     executor.shutdown(wait=False)
 
             self._add_log(
-                "INFO", f"Automation completed: {response_text[:200]}...", "automation"
+                "INFO", f"Automation completed: {response_text}", "automation"
             )
 
             # Determine success based on response

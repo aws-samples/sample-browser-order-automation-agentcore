@@ -1877,7 +1877,8 @@ async def get_sessions():
 async def get_review_queue():
     """Get orders requiring human review"""
     try:
-        orders = db_manager.get_all_orders(status_filter=["requires_human"], limit=50)
+        # Get orders that require human review
+        orders = db_manager.get_orders_requiring_human_review()
 
         return {"orders": [order.to_dict() for order in orders], "total": len(orders)}
 

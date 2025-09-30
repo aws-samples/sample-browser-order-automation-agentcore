@@ -599,6 +599,26 @@ class DatabaseManager:
             logger.error(f"Full traceback: {traceback.format_exc()}")
             return []
 
+    def get_orders_requiring_human_review(self) -> List[Order]:
+        """Get orders that require human review based on the requires_human_review flag"""
+        try:
+            with self.get_session() as session:
+                order_models = (
+                    session.query(OrderModel)
+                    .filter(OrderModel.requires_human_review == True)
+                    .order_by(OrderModel.created_at.desc())
+                    .all()
+                )
+
+                return [
+                    self._model_to_order(order_model) for order_model in order_models
+                ]
+        except Exception as e:
+            logger.error(f"DatabaseManager.get_orders_requiring_human_review() failed: {e}")
+            import traceback
+            logger.error(f"Full traceback: {traceback.format_exc()}")
+            return []
+
     def get_next_order(self) -> Optional[Order]:
         """Get next pending order by priority and atomically mark it as processing"""
         try:
