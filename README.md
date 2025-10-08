@@ -2,6 +2,8 @@
 
 A sample e-commerce order automation application built on Amazon Bedrock AgentCore Browser with Nova Act, Strands Agent, and Playwright MCP for secure browser automation and intelligent agent orchestration capabilities.
 
+![Demo](main.gif)
+
 **Note**: This is a sample application for demonstration purposes. Review and modify security settings, resource configurations, and access policies according to your organization's requirements before deploying to production environments.
 
 ## Key Features
