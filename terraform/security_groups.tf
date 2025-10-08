@@ -5,7 +5,7 @@ resource "aws_security_group" "alb" {
 
   # Allow HTTP/HTTPS but will be restricted by custom header in ALB listener rules
   ingress {
-    description = "HTTP"
+    description = "HTTP from CloudFront and public"
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
@@ -13,7 +13,7 @@ resource "aws_security_group" "alb" {
   }
 
   ingress {
-    description = "HTTPS"
+    description = "HTTPS from CloudFront and public"
     from_port   = 443
     to_port     = 443
     protocol    = "tcp"
@@ -21,6 +21,7 @@ resource "aws_security_group" "alb" {
   }
 
   egress {
+    description = "Allow all outbound traffic"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
@@ -42,7 +43,7 @@ resource "aws_security_group" "ecs" {
   vpc_id      = aws_vpc.main.id
 
   ingress {
-    description     = "HTTP from ALB"
+    description     = "HTTP from ALB only"
     from_port       = 8080
     to_port         = 8080
     protocol        = "tcp"
@@ -50,6 +51,7 @@ resource "aws_security_group" "ecs" {
   }
 
   egress {
+    description = "Allow all outbound traffic for AWS services"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"

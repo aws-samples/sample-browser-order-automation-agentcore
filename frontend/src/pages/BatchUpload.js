@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Container,
@@ -20,10 +20,8 @@ import {
   Modal,
   Input,
   Textarea,
-
   Wizard,
-  Link,
-  KeyValuePairs
+  Link
 } from '@cloudscape-design/components';
 import ModelSelector from '../components/ModelSelector';
 
@@ -55,9 +53,6 @@ const BatchUpload = ({ addNotification }) => {
   const [showEditModal, setShowEditModal] = useState(false);
   const [editingItem, setEditingItem] = useState(null);
   const [editFormData, setEditFormData] = useState({});
-  
-  // Upload results state
-  const [uploadResults, setUploadResults] = useState(null);
 
   const automationMethods = [
     { value: 'nova_act', label: 'Nova Act + AgentCore Browser' },
@@ -165,13 +160,16 @@ const BatchUpload = ({ addNotification }) => {
     
     const urlLower = url.toLowerCase();
     
-    // Direct domain matches first
-    if (urlLower.includes('order.sanghwa.people.aws.dev/shop')) return 'ShopZone';
-    if (urlLower.includes('neimanmarcus.com')) return 'neiman_marcus';
-    if (urlLower.includes('net-a-porter.com')) return 'net_a_porter';
-    if (urlLower.includes('mytheresa.com')) return 'mytheresa';
-    if (urlLower.includes('amazon.com')) return 'amazon';
-    if (urlLower.includes('farfetch.com')) return 'farfetch';
+    // Extract domain from URL for retailer identification
+    try {
+      const urlObj = new URL(url);
+      const domain = urlObj.hostname.replace('www.', '');
+      // Use domain as retailer identifier (e.g., "example.com" -> "example")
+      const retailer = domain.split('.')[0];
+      if (retailer) return retailer;
+    } catch (e) {
+      // If URL parsing fails, continue to fallback logic
+    }
     
     // Handle affiliate links with murl parameter
     if (urlLower.includes('murl=')) {
@@ -185,7 +183,6 @@ const BatchUpload = ({ addNotification }) => {
           if (decodedUrl.includes('neimanmarcus.com')) return 'neiman_marcus';
           if (decodedUrl.includes('net-a-porter.com')) return 'net_a_porter';
           if (decodedUrl.includes('mytheresa.com')) return 'mytheresa';
-          if (decodedUrl.includes('farfetch.com')) return 'farfetch';
           if (decodedUrl.includes('amazon.com')) return 'amazon';
         }
       } catch (e) {

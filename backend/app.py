@@ -307,19 +307,21 @@ async def lifespan(app: FastAPI):
 
 # Create FastAPI app
 app = FastAPI(
-    title="Order Automation System",
+    title="Order Automation with Amazon Bedrock AgentCore Browser",
     description="Production-ready e-commerce automation platform",
     version="1.0.0",
     lifespan=lifespan,
 )
 
-# CORS middleware
+# CORS middleware - configure based on environment
+allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
+    max_age=3600,
 )
 
 # Mount static files for screenshots
@@ -851,30 +853,29 @@ async def resume_nova_act_after_captcha(order_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# Secret Vault API Endpoints
+# Secret Vault API Endpoints (AWS Secrets Manager)
 @app.get("/api/secrets")
 async def get_secrets():
-    """Get all secret vault entries (passwords masked)"""
+    """Get all secret vault entries from AWS Secrets Manager (passwords masked)"""
     try:
-        # Check if database is properly initialized
-        if not hasattr(db_manager, "get_secrets"):
-            logger.error("Database manager does not have get_secrets method")
-            return {"secrets": []}
-
-        secrets = db_manager.get_secrets(include_passwords=False)
-        return {
-            "secrets": [secret.to_dict(include_password=False) for secret in secrets]
-        }
+        from services.secrets_manager import get_secrets_manager
+        
+        secrets_manager = get_secrets_manager()
+        secrets = secrets_manager.list_secrets(include_passwords=False)
+        
+        return {"secrets": secrets}
     except Exception as e:
-        logger.error(f"Failed to get secrets: {e}")
+        logger.error(f"Failed to get secrets from AWS Secrets Manager: {e}")
         # Return empty list instead of error to prevent frontend infinite loading
         return {"secrets": []}
 
 
 @app.post("/api/secrets")
 async def create_secret(secret_data: dict):
-    """Create a new secret vault entry"""
+    """Create a new secret in AWS Secrets Manager"""
     try:
+        from services.secrets_manager import get_secrets_manager
+        
         required_fields = ["site_name", "site_url"]
         for field in required_fields:
             if field not in secret_data:
@@ -882,7 +883,8 @@ async def create_secret(secret_data: dict):
                     status_code=400, detail=f"Missing required field: {field}"
                 )
 
-        secret_id = db_manager.create_secret(
+        secrets_manager = get_secrets_manager()
+        secret_arn = secrets_manager.create_secret(
             site_name=secret_data["site_name"],
             site_url=secret_data["site_url"],
             username=secret_data.get("username"),
@@ -890,65 +892,76 @@ async def create_secret(secret_data: dict):
             additional_fields=secret_data.get("additional_fields", {}),
         )
 
-        return {"success": True, "secret_id": secret_id}
+        return {"success": True, "secret_arn": secret_arn}
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to create secret: {e}")
+        logger.error(f"Failed to create secret in AWS Secrets Manager: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/secrets/{secret_id}")
-async def get_secret(secret_id: str, include_password: bool = False):
-    """Get a specific secret vault entry"""
+@app.get("/api/secrets/{site_name}")
+async def get_secret(site_name: str, include_password: bool = False):
+    """Get a specific secret from AWS Secrets Manager"""
     try:
-        secret = db_manager.get_secret(secret_id, include_password=include_password)
+        from services.secrets_manager import get_secrets_manager
+        
+        secrets_manager = get_secrets_manager()
+        secret = secrets_manager.get_secret(site_name, include_password=include_password)
+        
         if not secret:
             raise HTTPException(status_code=404, detail="Secret not found")
 
-        return secret.to_dict(include_password=include_password)
+        return secret
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to get secret {secret_id}: {e}")
+        logger.error(f"Failed to get secret {site_name} from AWS Secrets Manager: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.put("/api/secrets/{secret_id}")
-async def update_secret(secret_id: str, secret_data: dict):
-    """Update a secret vault entry"""
+@app.put("/api/secrets/{site_name}")
+async def update_secret(site_name: str, secret_data: dict):
+    """Update a secret in AWS Secrets Manager"""
     try:
-        success = db_manager.update_secret(
-            secret_id=secret_id,
-            site_name=secret_data.get("site_name"),
+        from services.secrets_manager import get_secrets_manager
+        
+        secrets_manager = get_secrets_manager()
+        secret_arn = secrets_manager.update_secret(
+            site_name=site_name,
             site_url=secret_data.get("site_url"),
             username=secret_data.get("username"),
             password=secret_data.get("password"),
             additional_fields=secret_data.get("additional_fields"),
         )
 
-        if not success:
-            raise HTTPException(status_code=404, detail="Secret not found")
-
-        return {"success": True}
+        return {"success": True, "secret_arn": secret_arn}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to update secret {secret_id}: {e}")
+        logger.error(f"Failed to update secret {site_name} in AWS Secrets Manager: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/api/secrets/{secret_id}")
-async def delete_secret(secret_id: str):
-    """Delete a secret vault entry"""
+@app.delete("/api/secrets/{site_name}")
+async def delete_secret(site_name: str, force: bool = False):
+    """Delete a secret from AWS Secrets Manager"""
     try:
-        success = db_manager.delete_secret(secret_id)
+        from services.secrets_manager import get_secrets_manager
+        
+        secrets_manager = get_secrets_manager()
+        success = secrets_manager.delete_secret(site_name, force_delete=force)
+        
         if not success:
             raise HTTPException(status_code=404, detail="Secret not found")
 
-        return {"success": True}
+        return {"success": True, "message": "Secret scheduled for deletion (30-day recovery window)" if not force else "Secret deleted immediately"}
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Failed to delete secret {secret_id}: {e}")
+        logger.error(f"Failed to delete secret {site_name} from AWS Secrets Manager: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1843,7 +1856,7 @@ async def get_sessions():
             {
                 "id": "session_1",
                 "status": "active",
-                "retailer": "farfetch",
+                "retailer": "sample_retailer",
                 "created_at": datetime.now().isoformat(),
                 "last_activity": datetime.now().isoformat(),
                 "orders_processed": 3,
@@ -1940,15 +1953,15 @@ async def create_sample_order(automation_method: str = "strands"):
     try:
         # Sample order data
         sample_order = {
-            "retailer": "farfetch",
+            "retailer": "sample_retailer",
             "automation_method": automation_method,
             "product": {
-                "url": "https://www.farfetch.com/shopping/women/gucci-gg-marmont-small-matelasse-shoulder-bag-item-12345.aspx",
-                "name": "Gucci GG Marmont Small Matelassé Shoulder Bag",
+                "url": "https://example.com/product/sample-item-12345",
+                "name": "Sample Product Item",
                 "size": None,
                 "color": "Black",
                 "quantity": 1,
-                "price": 1890.00,
+                "price": 100.00,
             },
             "customer_name": "Jane Doe",
             "customer_email": "jane.doe@example.com",
@@ -2014,10 +2027,10 @@ async def compare_automation_methods():
         for method in ["strands", "nova_act"]:
             try:
                 order_id = await order_queue.add_order(
-                    retailer="farfetch",
+                    retailer="sample_retailer",
                     automation_method=method,
-                    product_name="Gucci GG Marmont Small Matelassé Shoulder Bag",
-                    product_url="https://www.farfetch.com/shopping/women/gucci-gg-marmont-small-matelasse-shoulder-bag-item-12345.aspx",
+                    product_name="Sample Product Item",
+                    product_url="https://example.com/product/sample-item-12345",
                     customer_name="Jane Doe",
                     customer_email="jane.doe@example.com",
                     shipping_address={
@@ -2321,25 +2334,22 @@ async def upload_orders_csv(
                     f"{brand} {product_name}".strip() if brand else product_name
                 )
 
-                # Determine retailer from URL (handle affiliate links)
+                # Determine retailer from URL (generic domain extraction)
                 retailer = "unknown"
                 url_lower = product_url.lower()
                 
-                # Check for direct domain matches first
-                if "order.sanghwa.people.aws.dev/shop" in url_lower:
-                    retailer = "ShopZone"
-                elif "neimanmarcus.com" in url_lower:
-                    retailer = "neiman_marcus"
-                elif "net-a-porter.com" in url_lower:
-                    retailer = "net_a_porter"
-                elif "mytheresa.com" in url_lower:
-                    retailer = "mytheresa"
-                elif "amazon.com" in url_lower:
-                    retailer = "amazon"
-                elif "farfetch.com" in url_lower:
-                    retailer = "farfetch"
+                # Extract domain from URL for retailer identification
+                try:
+                    from urllib.parse import urlparse
+                    parsed_url = urlparse(product_url)
+                    domain = parsed_url.netloc.replace('www.', '')
+                    # Use domain as retailer identifier (e.g., "example.com" -> "example")
+                    retailer = domain.split('.')[0] if domain else "unknown"
+                except Exception:
+                    retailer = "unknown"
+                
                 # Handle affiliate links that contain the actual retailer in the URL
-                elif "murl=" in url_lower:
+                if "murl=" in url_lower:
                     # Extract the actual URL from affiliate link
                     import urllib.parse
                     if "murl=" in url_lower:
@@ -2358,12 +2368,11 @@ async def upload_orders_csv(
                                 retailer = "net_a_porter"
                             elif "mytheresa.com" in decoded_url:
                                 retailer = "mytheresa"
-                            elif "farfetch.com" in decoded_url:
-                                retailer = "farfetch"
                         except Exception:
                             pass
+                
                 # Handle other affiliate patterns
-                elif ("jdoqocy.com" in url_lower or "dpbolvw.net" in url_lower) and "mytheresa.com" in url_lower:
+                if ("jdoqocy.com" in url_lower or "dpbolvw.net" in url_lower) and "mytheresa.com" in url_lower:
                     retailer = "mytheresa"
 
                 # Create order with provided settings

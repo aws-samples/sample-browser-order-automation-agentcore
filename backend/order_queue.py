@@ -256,15 +256,22 @@ class OrderQueue:
             # Get site credentials for this retailer
             site_credentials = None
             try:
-                # Look for credentials matching the retailer name or URL
-                secrets = self.db_manager.get_secrets(
-                    site_name=order.retailer, include_passwords=True
-                )
-                if not secrets and default_url:
-                    # Try to find by URL if no exact name match
-                    all_secrets = self.db_manager.get_secrets(include_passwords=True)
+                # Look for credentials in AWS Secrets Manager
+                from services.secrets_manager import get_secrets_manager
+                secrets_manager = get_secrets_manager()
+                
+                secret = secrets_manager.get_secret(order.retailer, include_password=True)
+                if secret:
+                    credentials = {
+                        "username": secret.get("username"),
+                        "password": secret.get("password"),
+                        "additional_fields": secret.get("additional_fields", {})
+                    }
+                elif default_url:
+                    # Try to search by URL if no exact name match
+                    all_secrets = secrets_manager.list_secrets(include_passwords=True)
                     for secret in all_secrets:
-                        if secret.site_url and default_url.get("starting_url"):
+                        if secret.get("site_url") and default_url.get("starting_url"):
                             # Check if URLs match (basic domain matching)
                             try:
                                 from urllib.parse import urlparse

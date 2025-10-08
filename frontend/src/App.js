@@ -206,7 +206,7 @@ function AppContent() {
             }
           >
             <div>
-              <p>This dashboard demonstrates AI-powered order automation for luxury retail using advanced browser automation:</p>
+              <p>This dashboard demonstrates AI-powered order automation for retailers using advanced browser automation:</p>
 
               <h3>Automation Methods</h3>
               <ul>
@@ -409,7 +409,7 @@ function AppContent() {
       <TopNavigation
         identity={{
           href: '/dashboard',
-          title: 'Order Automation System'
+          title: 'Order Automation with Amazon Bedrock AgentCore Browser'
         }}
         utilities={topNavigationUtilities}
       />

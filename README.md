@@ -1,422 +1,399 @@
-# AI-Powered E-commerce Automation Platform
+# Browser Order Automation with Amazon Bedrock AgentCore (Sample)
 
-A modern, scalable platform for automating e-commerce workflows using advanced AI agents and intelligent browser automation.
+A scalable, AI-powered e-commerce order automation sample application built on Amazon Bedrock AgentCore with secure browser automation and intelligent agent orchestration capabilities.
 
-## Overview
-
-This platform demonstrates how AI agents can automate complex e-commerce tasks with human-in-the-loop capabilities. Built with modern web technologies, it showcases intelligent browser automation, real-time monitoring, and enterprise-grade architecture patterns.
+**Note**: This is a sample application for demonstration purposes. Review and modify security settings, resource configurations, and access policies according to your organization's requirements before deploying to production environments.
 
 ## Key Features
 
-### AI-Powered Automation
-- **Multiple AI Agents**: Support for different automation strategies (Strands, Nova Act)
-- **Intelligent Decision Making**: AI agents that can handle complex scenarios
-- **Natural Language Processing**: Human-like interaction with web interfaces
-- **Adaptive Learning**: Agents that improve over time
+- **AI-Powered Automation**: Amazon Bedrock Claude models (Sonnet 4, Opus 4.1) for intelligent order processing
+- **Secure Browser Automation**: Amazon Bedrock AgentCore Browser Tool provides isolated, managed browser environment
+- **Multi-Agent Architecture**: Strands Agent orchestrates Nova Act and Playwright MCP agents for complex workflows
+- **Real-time Monitoring**: WebSocket connections for live order tracking and browser session viewing
+- **Human-in-the-Loop**: Manual intervention with live browser view, session replay, and manual control takeover
+- **Batch Processing**: CSV upload support for bulk order automation with priority queuing
+- **Secure Credential Management**: AWS Secrets Manager for encrypted credential storage with KMS encryption
+- **High Availability**: Multi-AZ deployment with auto-scaling ECS Fargate tasks
+- **Enterprise Security**: VPC isolation, WAF protection, encrypted storage, and IAM-based access control
 
-### Multi-Platform Support
-- **Dynamic Configuration**: Easy addition of new e-commerce platforms
-- **Flexible URL Management**: Configure starting points for different sites
-- **Retailer-Agnostic**: Works with any e-commerce website
-- **Scalable Architecture**: Add new platforms without code changes
+## Architecture Overview
 
-### Human-in-the-Loop
-- **Smart Escalation**: Automatic handoff when human intervention needed
-- **Review Dashboard**: Clean interface for manual oversight
-- **Error Recovery**: Intelligent retry and fallback mechanisms
-- **Real-time Alerts**: Instant notifications for attention-required scenarios
+![Architecture Diagram](browser-order-automation.drawio.png)
 
-### Production Monitoring
-- **Live Dashboard**: Real-time tracking and metrics
-- **Queue Management**: Priority-based processing with pause/resume
-- **Performance Analytics**: Success rates, timing, and trend analysis
-- **Session Monitoring**: Live browser session viewing and control
-
-### Enterprise Architecture
-- **Database Flexibility**: SQLite for development, PostgreSQL for production
-- **Microservices Ready**: Clean separation of concerns
-- **Security First**: Token-based auth and encrypted data handling
-- **Full Observability**: Comprehensive logging and metrics
-
-## Architecture
-
-```mermaid
-sequenceDiagram
-    participant U as User Interface
-    participant API as FastAPI Backend
-    participant Q as Order Queue
-    participant A as AI Agent
-    participant B as Browser Session
-    participant E as E-commerce Site
-
-    U->>API: Create Order Request
-    API->>Q: Queue Order for Processing
-    API-->>U: Order Created (WebSocket)
-    
-    Q->>A: Start Order Processing
-    A->>B: Initialize Browser Session
-    B->>E: Navigate to Site
-    
-    loop Order Processing Steps
-        A->>B: Execute Action (click, type, etc.)
-        B->>E: Perform Action
-        E-->>B: Page Response
-        B-->>A: Action Result
-        A-->>API: Progress Update
-        API-->>U: Real-time Update (WebSocket)
-    end
-    
-    alt Success
-        A->>API: Order Completed
-        API->>Q: Mark Order Complete
-        API-->>U: Success Notification
-    else Error/CAPTCHA
-        A->>API: Human Intervention Required
-        API-->>U: Manual Review Required
-        U->>API: Manual Resolution
-        API->>Q: Resume Processing
-    end
-```
+This solution demonstrates a modern, cloud-native approach to e-commerce order automation using AWS services including Amazon Bedrock, AgentCore Browser Tool, ECS Fargate, and CloudFront. The system processes orders through an AI pipeline that automates web interactions, validates data, and provides real-time monitoring with human-in-the-loop capabilities.
 
 ### System Components
 
-#### Frontend Layer
-- **React Application**: Modern UI with AWS Cloudscape Design System
-- **WebSocket Client**: Real-time updates and live monitoring
-- **Order Management**: Create, track, and manage automation orders
+**Frontend Layer**
+- React 18 application with AWS Cloudscape Design System
+- CloudFront distribution for global content delivery
+- Real-time WebSocket connections for order status updates
+- Live browser view with DCV streaming and session replay
 
-#### Backend Layer
-- **FastAPI Server**: High-performance async API with automatic documentation
-- **Order Queue**: Priority-based processing with concurrent execution
-- **Database Layer**: SQLite for development, PostgreSQL for production
-- **WebSocket Handler**: Real-time communication with frontend
+**Backend Layer**
+- Python FastAPI application with asynchronous job processing
+- ARM64-optimized ECS Fargate containers
+- Priority-based job queue with concurrent workers (1-10 configurable)
+- WebSocket server for real-time updates
 
-#### Automation Layer
-- **Strands Agent**: LLM-powered browser automation with reasoning capabilities
-- **Nova Act Agent**: Natural language browser automation via AWS AgentCore
-- **Browser Service**: Unified session management and resource optimization
+**AI & Automation Layer**
+- Amazon Bedrock for Claude model access
+- AgentCore Browser Tool for secure web automation
+- Strands Agent for workflow orchestration
+- Nova Act for AI-powered browser intelligence
+- Playwright MCP Agent for browser actuation
 
-#### External Services
-- **AWS AgentCore**: Secure, scalable browser automation infrastructure
-- **E-commerce Sites**: Target platforms for order automation
+**Data & Security Layer**
+- Amazon RDS PostgreSQL for production, SQLite for development
+- AWS Secrets Manager for credential storage with KMS encryption
+- S3 for file uploads and session recordings
+- CloudWatch for metrics, logging, and monitoring
+## Application Logic Flow
 
-### Core Components
+### Order Processing Pipeline
 
-#### Automation Agents
-- **Strands Agent**: Uses Strands SDK with browser tools for intelligent browser control with LLM reasoning
-- **Nova Act Agent**: Natural language browser automation with AgentCore integration
-- **Browser Service**: Unified browser session lifecycle and resource management
+```mermaid
+graph TD
+    A[User Upload] --> B[Order Validation]
+    B --> C[Job Creation]
+    C --> D[Priority Queue]
+    D --> E[Agent Selection]
+    E --> F[Browser Automation]
+    F --> G[Real-time Monitoring]
+    G --> H{Success?}
+    H -->|Yes| I[Order Complete]
+    H -->|Issues| J[Human Review]
+    J --> K[Manual Resolution]
+    K --> I
+```
 
-#### Order Queue System
-- **Priority Processing**: High, normal, low priority queues
-- **Concurrent Execution**: Configurable parallel order processing
-- **Retry Logic**: Intelligent error recovery and retry mechanisms
-- **Human Escalation**: Automatic handoff for complex scenarios
+**Processing Flow:**
+1. **Order Creation**: User uploads single order or CSV batch with priority assignment
+2. **Queue Management**: Priority-based FIFO processing with configurable workers
+3. **Agent Orchestration**: Strands Agent coordinates Nova Act (AI) and Playwright MCP (browser control)
+4. **Browser Automation**: AgentCore Browser Tool provides isolated sessions with live monitoring
+5. **Human Review**: Complex cases routed for manual intervention with live browser control
 
-#### Data Layer
-- **Order Management**: Complete order lifecycle tracking
-- **Configuration**: Retailer settings and automation parameters
-- **Session Tracking**: Browser session state and thumbnails
-- **Metrics**: Performance and success rate analytics
+### System Interaction Flow
 
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant F as Frontend
+    participant A as FastAPI
+    participant Q as Job Queue
+    participant S as Strands Agent
+    participant B as AgentCore Browser
+    participant SM as Secrets Manager
+
+    U->>F: Upload order/CSV
+    F->>A: POST /api/orders
+    A->>Q: Add to priority queue
+    A->>F: Return job ID
+    
+    loop Background Processing
+        Q->>S: Get next job
+        S->>SM: Retrieve credentials
+        S->>B: Start browser session
+        B->>S: Live view URL
+        S->>A: Progress updates
+        A->>F: WebSocket updates
+        F->>U: Real-time status
+    end
+```
+
+### Agent Architecture
+
+**Strands Agent** - Main orchestrator
+- Workflow coordination and state management
+- Credential retrieval from AWS Secrets Manager
+- Browser session lifecycle management
+- Progress tracking and error handling
+
+**Nova Act** - AI-powered browser intelligence
+- Natural language to browser actions
+- Visual understanding of web pages
+- Adaptive navigation strategies
+- CAPTCHA detection and human escalation
+
+**Playwright MCP** - Browser actuation
+- Low-level browser control and element interaction
+- Form filling and submission
+- Network request monitoring
 ## Quick Start
 
 ### Prerequisites
-- Python 3.11+
-- Node.js 18+
-- AWS Account (for AgentCore Browser)
 
-### Installation & Setup
+**Local Development**
+- Python 3.9+
+- Node.js 16+
+- AWS CLI configured with appropriate permissions
 
-1. **Clone and Install**
-   ```bash
-   git clone <repository-url>
-   cd ai-ecommerce-automation
-   
-   # Install dependencies
-   cd backend && pip install -r requirements.txt
-   cd ../frontend && npm install
-   ```
-
-2. **Configure Environment**
-   ```bash
-   # Copy environment template
-   cp backend/.env.example backend/.env
-   
-   # Add your configuration
-   export AWS_ACCESS_KEY_ID="your-aws-key"
-   export AWS_SECRET_ACCESS_KEY="your-aws-secret"
-   export AWS_DEFAULT_REGION="us-west-2"
-   ```
-
-3. **Start the Platform**
-   ```bash
-   # Simple one-command start
-   ./start.sh
-   
-   # Access the application
-   # Frontend: http://localhost:3000
-   # Backend API: http://localhost:8000
-   ```
-
-### First Steps
-1. **Configure Settings**: Visit Settings to set up AWS region and models
-2. **Add Platforms**: Add your e-commerce platforms in Retailer URL Management  
-3. **Create Test Order**: Use the Create Order page to test automation
-4. **Monitor Progress**: Watch real-time progress in the Dashboard
-
-## Configuration
-
-### Platform Configuration
-Configure supported e-commerce platforms through the web interface:
-
-1. **Settings Dashboard**: Navigate to Settings → Retailer URL Management
-2. **Add New Platform**: Click "Add URL" and configure:
-   - Platform name (e.g., "my-store")
-   - Website display name
-   - Starting URL for automation
-   - Set as default URL (optional)
-
-```javascript
-// Example configuration
-{
-  "retailer": "example-store",
-  "website_name": "Example Store Main",
-  "starting_url": "https://www.example-store.com",
-  "is_default": true
-}
-```
-
-### Automation Methods
-- **Nova Act + AgentCore Browser**: Advanced AI-powered automation (default)
-- **Strands + AgentCore Browser + Browser Tools**: Comprehensive automation with full browser control
-
-### Queue Settings
-```python
-QUEUE_SETTINGS = {
-    "max_concurrent_orders": 5,
-    "order_timeout_minutes": 30,
-    "retry_delay_seconds": 60,
-    "max_queue_size": 100
-}
-```
-
-## API Documentation
-
-### Order Management
-- `POST /api/orders` - Create new order
-- `GET /api/orders` - List orders with filtering
-- `GET /api/orders/{id}` - Get specific order
-- `PUT /api/orders/{id}` - Update order (human review)
-- `DELETE /api/orders/{id}` - Cancel order
-
-### Queue Management
-- `GET /api/queue/metrics` - Get queue statistics
-- `POST /api/queue/pause` - Pause order processing
-- `POST /api/queue/resume` - Resume order processing
-
-### Configuration
-- `GET /api/config/retailers` - Get supported retailers
-- `GET /api/config/automation-methods` - Get automation methods
-- `PUT /api/config/system` - Update system configuration
-
-### Human Review
-- `GET /api/review/queue` - Get orders requiring review
-- `POST /api/review/{id}/resolve` - Resolve human review
-
-## Testing
-
-### Backend Tests
-```bash
-cd backend
-pytest tests/ -v
-```
-
-### Frontend Tests
-```bash
-cd frontend
-npm test
-```
-
-### Integration Tests
-```bash
-# Run full system tests
-python tests/integration/test_order_flow.py
-```
-
-## Monitoring & Observability
-
-### Metrics Available
-- **Order Success Rate**: Percentage of successfully completed orders
-- **Processing Time**: Average time per order completion
-- **Queue Depth**: Current pending orders
-- **Error Rates**: Failure rates by retailer and method
-- **Human Intervention Rate**: Percentage requiring manual review
-
-### Real-time Monitoring
-- WebSocket-based live updates
-- Browser session thumbnails
-- Progress tracking with detailed steps
-- Error notifications and alerts
-
-### Logging
-- Structured logging with correlation IDs
-- Configurable log levels
-- Integration with external monitoring systems
-
-## Security
-
-### Data Protection
-- Payment information tokenization
-- Encrypted sensitive data storage
-- Secure API key management
-- Session-based authentication
-
-### Network Security
-- CORS configuration
-- Rate limiting
-- Input validation and sanitization
-- Secure WebSocket connections
-
-## Deployment
+**AWS Deployment**
+- AWS Account with Bedrock and AgentCore access
+- Terraform 1.0+
+- Domain registered in Route 53 (optional)
 
 ### Local Development
-- SQLite database
-- File-based configuration
-- Local browser sessions
 
-### Production Deployment
-- PostgreSQL/RDS database
-- Environment-based configuration
-- Distributed browser sessions
-- Load balancing support
+```bash
+# Clone the repository
+git clone <repository-url>
+cd browser-order-automation-agentcore
 
-### Docker Deployment
-```yaml
-version: '3.8'
-services:
-  backend:
-    build: ./backend
-    environment:
-      - DATABASE_URL=postgresql://user:pass@db:5432/orderdb
-    depends_on:
-      - db
-  
-  frontend:
-    build: ./frontend
-    ports:
-      - "3000:3000"
-  
-  db:
-    image: postgres:15
-    environment:
-      - POSTGRES_DB=orderdb
+# Backend setup
+cd backend
+pip install -r requirements.txt
+python app.py  # Starts on port 8000
+
+# Frontend setup (new terminal)
+cd frontend
+npm install
+npm start  # Starts on port 3000
+```
+
+Access the application at `http://localhost:3000`
+
+### Environment Configuration
+
+**Backend** (create `backend/.env`):
+```bash
+AWS_REGION=us-west-2
+FLASK_ENV=development
+ALLOWED_ORIGINS=http://localhost:3000
+
+# Optional - uses SQLite if not set
+# DATABASE_URL=postgresql://user:pass@host:5432/dbname
+```
+
+**Frontend** (create `frontend/.env`):
+```bash
+REACT_APP_API_URL=http://localhost:8000
 ```
 
 ### AWS Deployment
-- ECS/Fargate for containerized deployment
-- RDS for managed database
-- CloudWatch for monitoring
-- ALB for load balancing
 
-## Contributing
+```bash
+cd terraform
+cp terraform.tfvars.example terraform.tfvars
+# Edit terraform.tfvars with your configuration
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+terraform init
+terraform plan
+terraform apply
+```
 
-### Development Guidelines
-- Follow PEP 8 for Python code
-- Use ESLint/Prettier for JavaScript
-- Write tests for new features
-- Update documentation
+## Core Features
+
+### Order Management
+- **Single Orders**: Create individual orders with product URL, customer details, and automation method
+- **Batch Processing**: CSV upload for bulk orders with priority assignment
+- **Queue Management**: Priority-based processing (Low, Normal, High, Urgent)
+- **Status Tracking**: Real-time updates via WebSocket connections
+
+### Browser Automation
+- **Live View**: Real-time browser session viewing with DCV streaming
+- **Session Replay**: Recorded sessions for completed orders
+- **Manual Control**: Human takeover capability during automation
+- **Screenshot Capture**: Automatic screenshots at each automation step
+
+### Secret Management
+- **AWS Secrets Manager**: Encrypted credential storage with KMS
+- **Web UI**: Secret Vault interface for managing retailer credentials
+- **Automatic Retrieval**: Seamless credential access during automation
+- **Audit Logging**: Full CloudTrail integration for compliance
+
+### Monitoring & Observability
+- **Real-time Dashboard**: Order status, queue metrics, and system health
+- **WebSocket Updates**: Live progress tracking and notifications
+- **CloudWatch Integration**: Metrics, logs, and alarms
+- **Health Checks**: Application and infrastructure monitoring## AP
+I Reference
+
+### Order Management
+
+```http
+POST /api/orders
+Content-Type: application/json
+
+{
+  "retailer": "sample_retailer",
+  "automation_method": "nova_act",
+  "product": {
+    "url": "https://example.com/product",
+    "name": "Product Name",
+    "size": "M",
+    "color": "Blue",
+    "price": 99.99
+  },
+  "customer_name": "John Doe",
+  "customer_email": "john@example.com",
+  "shipping_address": {...},
+  "priority": "normal"
+}
+```
+
+```http
+GET /api/orders/{order_id}
+GET /api/orders?status=processing&limit=50
+DELETE /api/orders/{order_id}  # Cancel order
+```
+
+### Batch Processing
+
+```http
+POST /api/orders/upload-csv
+Content-Type: multipart/form-data
+
+file: CSV file
+automation_method: "nova_act" | "strands"
+ai_model: "nova_act" | "claude-sonnet-4"
+```
+
+### Live Monitoring
+
+```http
+GET /api/orders/{order_id}/live-view
+GET /api/orders/{order_id}/session-replay
+POST /api/orders/{order_id}/take-control
+POST /api/orders/{order_id}/release-control
+```
+
+### Secret Management
+
+```http
+GET /api/secrets
+POST /api/secrets
+GET /api/secrets/{site_name}
+PUT /api/secrets/{site_name}
+DELETE /api/secrets/{site_name}
+```
+
+### WebSocket Events
+
+```javascript
+// Connect to real-time updates
+const ws = new WebSocket('ws://localhost:8000/ws');
+
+// Order status updates
+{
+  "type": "order_updated",
+  "order_id": "uuid",
+  "status": "processing",
+  "progress": 45
+}
+
+// Live browser screenshots
+{
+  "type": "screenshot",
+  "order_id": "uuid",
+  "image_url": "/api/screenshots/image.png"
+}
+```
+
+## Security Considerations
+
+### AWS Secrets Manager Integration
+- **Encryption**: Automatic KMS encryption for all stored credentials
+- **Access Control**: IAM-based permissions with least privilege
+- **Audit Trail**: CloudTrail logging for all secret access
+- **Rotation**: Built-in support for automatic credential rotation
+
+### Network Security
+- **VPC Isolation**: Private subnets for application and database tiers
+- **WAF Protection**: Application firewall with common attack prevention
+- **TLS Encryption**: HTTPS/TLS for all data in transit
+- **Security Groups**: Least-privilege network access rules
+
+### Browser Security
+- **Isolated Sessions**: AgentCore Browser Tool provides containerized environments
+- **Session Cleanup**: Automatic cleanup after order completion
+- **Access Logging**: Detailed audit logs for all browser interactions
+
+## Deployment
+
+### Terraform Configuration
+
+Key variables in `terraform.tfvars`:
+
+```hcl
+project_name = "order-automation"
+environment  = "prod"
+aws_region   = "us-west-2"
+
+# Optional custom domain
+domain_name = "orders.yourdomain.com"
+
+# ECS Configuration
+ecs_task_cpu      = 512
+ecs_task_memory   = 1024
+ecs_desired_count = 2
+enable_auto_scaling = true
+```
+
+### Infrastructure Components
+- **ECS Fargate**: Containerized application with auto-scaling
+- **Application Load Balancer**: Traffic distribution with health checks
+- **RDS PostgreSQL**: Managed database with encryption
+- **CloudFront**: Global content delivery network
+- **S3**: Static assets and file storage
+- **Secrets Manager**: Encrypted credential storage
+
+## Monitoring
+
+### CloudWatch Metrics
+- ECS service metrics (CPU, memory, task count)
+- Application Load Balancer metrics (requests, latency)
+- Custom application metrics (order processing, queue depth)
+
+### Health Checks
+- Application health endpoint: `GET /health`
+- ECS container health checks
+- ALB target group health monitoring
+
+### Logging
+- Structured JSON logging with multiple levels
+- CloudWatch Logs integration
+- Real-time log streaming and filtering
+
+## Development
+
+### Local Development
+1. **Database**: Automatic SQLite when `DATABASE_URL` not set
+2. **AWS Services**: Configure AWS CLI with development credentials
+3. **Hot Reload**: Both frontend and backend support hot reload
+
+### Testing
+```bash
+# Backend tests
+cd backend && python -m pytest tests/
+
+# Frontend tests
+cd frontend && npm test
+
+# Integration tests
+npm run test:integration
+```
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
 
 ## Support
 
-### Documentation
-- [API Documentation](http://localhost:8000/docs) - Interactive API docs
-- [Architecture Guide](docs/architecture.md) - System design details
-- [Configuration Reference](docs/configuration.md) - Complete config options
+For questions, issues, or contributions:
+1. Check existing [Issues](../../issues)
+2. Create a new issue with detailed description
+3. Review [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines
 
-### Getting Help
-- Create an issue for bugs or feature requests
-- Check existing issues for solutions
-- Review the troubleshooting guide
+## Additional Resources
 
-### Troubleshooting
-
-#### Common Issues
-1. **Database Connection Errors**
-   - Check DATABASE_URL environment variable
-   - Ensure database server is running
-   - Verify credentials and permissions
-
-2. **Browser Automation Failures**
-   - Install Playwright browsers: `playwright install`
-   - Check for CAPTCHA requirements
-   - Verify retailer website accessibility
-
-3. **WebSocket Connection Issues**
-   - Check CORS configuration
-   - Verify backend server is running
-   - Check firewall settings
-
-#### Performance Optimization
-- Adjust `max_concurrent_orders` based on system resources
-- Monitor memory usage with multiple browser sessions
-- Use headless mode for better performance
-- Configure appropriate timeouts
-
-## Technology Stack
-
-### Frontend
-- **React 18** with modern hooks and context
-- **AWS Cloudscape Design System** for enterprise UI
-- **WebSocket** for real-time updates
-- **Responsive Design** for all devices
-
-### Backend  
-- **FastAPI** for high-performance async API
-- **SQLAlchemy** with SQLite/PostgreSQL support
-- **WebSocket** for real-time communication
-- **Structured Logging** for observability
-
-### AI & Automation
-- **AWS Bedrock** for foundation models (Claude, Nova)
-- **AgentCore Browser** for secure browser automation
-- **Strands SDK** for intelligent browser tools
-- **Nova Act** for natural language automation
-
-## Use Cases
-
-This platform demonstrates several key automation patterns:
-
-- **E-commerce Workflow Automation**: End-to-end order processing
-- **AI Agent Orchestration**: Multiple agents working together
-- **Human-AI Collaboration**: Seamless handoff between AI and humans
-- **Real-time Monitoring**: Live tracking of automated processes
-- **Error Recovery**: Intelligent handling of edge cases
-
-## Performance & Scalability
-
-- **Concurrent Processing**: Handle multiple orders simultaneously
-- **Queue Management**: Priority-based processing with smart scheduling
-- **Resource Optimization**: Efficient browser session management
-- **Monitoring**: Real-time metrics and performance tracking
-
-## Security & Compliance
-
-- **Data Protection**: Tokenized sensitive information
-- **Secure Communication**: HTTPS and WSS protocols
-- **Access Control**: Role-based permissions
-- **Audit Logging**: Complete activity tracking
+- [Amazon Bedrock Documentation](https://docs.aws.amazon.com/bedrock/)
+- [Amazon Bedrock AgentCore Browser Tool](https://docs.aws.amazon.com/bedrock/latest/userguide/agentcore-browser.html)
+- [AWS Secrets Manager Best Practices](https://docs.aws.amazon.com/secretsmanager/latest/userguide/best-practices.html)
+- [ECS Fargate Best Practices](https://docs.aws.amazon.com/AmazonECS/latest/bestpracticesguide/)
+- [React Cloudscape Design System](https://cloudscape.design/)
 
 ---
 
-**A modern demonstration of AI-powered automation with enterprise-grade architecture.**
+**Note**: This is a sample application for demonstration purposes. Review and modify security settings, resource configurations, and access policies according to your organization's requirements before deploying to production environments.

@@ -138,3 +138,4 @@ temp/
 
 # CSV files
 *.csv
+!sample_shopzone.csv

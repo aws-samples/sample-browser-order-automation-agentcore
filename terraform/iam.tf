@@ -102,7 +102,10 @@ resource "aws_iam_role_policy" "ecs_task" {
         Sid = "S3FullAccess"
         Effect = "Allow"
         Action = [
-          "s3:*"
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:DeleteObject",
+          "s3:ListBucket"
         ]
         Resource = [
           aws_s3_bucket.app_data.arn,
@@ -110,9 +113,7 @@ resource "aws_iam_role_policy" "ecs_task" {
           aws_s3_bucket.static_assets.arn,
           "${aws_s3_bucket.static_assets.arn}/*",
           "arn:aws:s3:::bedrock-agentcore-*",
-          "arn:aws:s3:::bedrock-agentcore-*/*",
-          "arn:aws:s3:::sanghwa-oregon",
-          "arn:aws:s3:::sanghwa-oregon/*"
+          "arn:aws:s3:::bedrock-agentcore-*/*"
         ]
       },
       {
@@ -227,6 +228,38 @@ resource "aws_iam_role_policy" "ecs_task" {
           "bedrock:ApplyGuardrail"
         ]
         Resource = "*"
+      },
+      {
+        Sid = "SecretsManagerAccess"
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:GetSecretValue",
+          "secretsmanager:CreateSecret",
+          "secretsmanager:UpdateSecret",
+          "secretsmanager:DeleteSecret",
+          "secretsmanager:ListSecrets",
+          "secretsmanager:DescribeSecret",
+          "secretsmanager:PutSecretValue",
+          "secretsmanager:TagResource"
+        ]
+        Resource = [
+          "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:order-automation/credentials/*"
+        ]
+      },
+      {
+        Sid = "KMSAccessForSecretsManager"
+        Effect = "Allow"
+        Action = [
+          "kms:Decrypt",
+          "kms:DescribeKey",
+          "kms:GenerateDataKey"
+        ]
+        Resource = "*"
+        Condition = {
+          StringEquals = {
+            "kms:ViaService" = "secretsmanager.${var.aws_region}.amazonaws.com"
+          }
+        }
       }
     ]
   })
@@ -303,10 +336,14 @@ resource "aws_iam_role_policy" "bedrock_agentcore_execution" {
         Effect = "Allow"
         Action = [
           "s3:PutObject",
+          "s3:GetObject",
           "s3:ListMultipartUploadParts",
           "s3:AbortMultipartUpload"
         ]
-        Resource = "arn:aws:s3:::sanghwa-oregon/*"
+        Resource = [
+          "${aws_s3_bucket.app_data.arn}/*",
+          "arn:aws:s3:::bedrock-agentcore-*/*"
+        ]
         Condition = {
           StringEquals = {
             "aws:ResourceAccount" = data.aws_caller_identity.current.account_id

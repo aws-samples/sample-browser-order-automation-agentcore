@@ -81,8 +81,7 @@ const Settings = ({ addNotification }) => {
           execution_roles: data.execution_roles || []
         }));
       } else {
-        const errorText = await response.text();
-
+        await response.text();
         throw new Error('Failed to load IAM roles');
       }
 
@@ -114,8 +113,7 @@ const Settings = ({ addNotification }) => {
           s3_buckets: data.s3_buckets || []
         }));
       } else {
-        const errorText = await response.text();
-
+        await response.text();
         throw new Error('Failed to load S3 buckets');
       }
 

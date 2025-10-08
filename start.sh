@@ -1,14 +1,14 @@
 #!/bin/bash
 
 # Browser Order Automation - Development Server
-echo "🚀 Starting Browser Order Automation System"
+echo "Starting Browser Order Automation System"
 echo "============================================="
 echo ""
 
 # Function to cleanup processes on exit
 cleanup() {
     echo ""
-    echo "🛑 Shutting down servers..."
+    echo "Shutting down servers..."
     
     # Kill processes on specific ports
     lsof -ti:8000 | xargs kill -9 2>/dev/null || true

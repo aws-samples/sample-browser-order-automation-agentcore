@@ -14,8 +14,7 @@ import {
   Alert,
   Modal,
   KeyValuePairs,
-  Popover,
-  Link
+  Popover
 } from '@cloudscape-design/components';
 import LiveScreenshotViewer from '../components/LiveScreenshotViewer';
 import LiveBrowserViewer from '../components/LiveBrowserViewer';
@@ -546,11 +545,11 @@ const OrderDetails = ({ addNotification }) => {
                       color: '#495057',
                       marginLeft: '16px'
                     }}>
-                      {update.data.thought && `💭 ${update.data.thought}`}
-                      {update.data.action && `⚡ ${update.data.action}`}
-                      {update.data.command && `🚀 ${update.data.command}`}
-                      {update.data.error && `❌ ${update.data.error}`}
-                      {update.data.html_path && `📊 Report available (${update.data.total_steps} steps)`}
+                      {update.data.thought && `Thought: ${update.data.thought}`}
+                      {update.data.action && `Action: ${update.data.action}`}
+                      {update.data.command && `Command: ${update.data.command}`}
+                      {update.data.error && `Error: ${update.data.error}`}
+                      {update.data.html_path && `Report available (${update.data.total_steps} steps)`}
                     </div>
                   </div>
                 );

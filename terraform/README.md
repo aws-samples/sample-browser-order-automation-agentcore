@@ -28,7 +28,7 @@ This Terraform configuration provides complete AWS deployment for the Order Auto
 - **IAM Roles**: Least privilege principle
 - **S3 Bucket Policies**: Secure access
 
-## 🚀 Deployment Guide
+## Deployment Guide
 
 ### 1. Prerequisites
 

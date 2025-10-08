@@ -18,8 +18,6 @@ import {
   CollectionPreferences,
   PropertyFilter,
   Link,
-  FileUpload,
-  FormField,
   Popover
 } from '@cloudscape-design/components';
 
@@ -597,7 +595,7 @@ const OrderDashboard = ({ addNotification }) => {
     <SpaceBetween size="l">
       <Header
         variant="h1"
-        description="AI-powered e-commerce order automation system"
+        description="Sample e-commerce order automation demo with Amazon Bedrock AgentCore Browser"
         actions={
           <SpaceBetween direction="horizontal" size="xs">
             {selectedItems.length > 0 && canCancelSelected() && (

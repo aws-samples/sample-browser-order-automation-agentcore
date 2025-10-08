@@ -408,7 +408,7 @@ You have access to Playwright MCP tools for:
 - Handle errors gracefully and retry
 - Be autonomous - don't ask for permission
 
-🚨 IMPORTANT: This model does not support image content. Do NOT use screenshot tools or any image-related functionality.
+IMPORTANT: This model does not support image content. Do NOT use screenshot tools or any image-related functionality.
 
 Region: {self.region}
 """
@@ -484,9 +484,9 @@ Login Credentials (use if needed):
 """
 
             # Create instruction for the agent
-            instruction = f"""🚀 AUTONOMOUS ORDER EXECUTION TASK
+            instruction = f"""AUTONOMOUS ORDER EXECUTION TASK
 
-🛍️ ORDER DETAILS:
+ORDER DETAILS:
 Product: {order.product_name}
 URL: {order.product_url}
 Size: {order.product_size or 'any available'}

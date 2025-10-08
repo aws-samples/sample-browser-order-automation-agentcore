@@ -20,10 +20,10 @@
     "web-vitals": "^3.5.0"
   },
   "scripts": {
-    "start": "react-scripts start",
-    "dev": "react-scripts start",
-    "build": "react-scripts build",
-    "test": "react-scripts test",
+    "start": "craco start",
+    "dev": "craco start",
+    "build": "craco build",
+    "test": "craco test",
     "eject": "react-scripts eject"
   },
   "eslintConfig": {
@@ -45,12 +45,19 @@
     ]
   },
   "devDependencies": {
-    "@craco/craco": "^7.1.0",
+    "@craco/craco": "7.1.0",
     "@types/jest": "^27.5.0",
     "@types/node": "^18.0.0",
     "@types/react": "^18.2.0",
     "@types/react-dom": "^18.2.0",
-    "autoprefixer": "^10.4.21"
+    "autoprefixer": "^10.4.21",
+    "webpack-dev-server": "5.2.2"
+  },
+  "overrides": {
+    "nth-check": "2.1.1",
+    "webpack-dev-server": "5.2.2",
+    "svgo": "3.2.0",
+    "postcss": "8.4.47"
   },
   "proxy": "http://localhost:8000"
 }

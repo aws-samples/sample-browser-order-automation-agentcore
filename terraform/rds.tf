@@ -39,9 +39,13 @@ resource "aws_security_group" "rds" {
 
 # Random password for RDS
 resource "random_password" "db_password" {
-  length  = 16
+  length  = 32
   special = true
   override_special = "!#$%&*()-_=+[]{}<>:?"
+  min_lower = 1
+  min_upper = 1
+  min_numeric = 1
+  min_special = 1
 }
 
 # RDS Instance
@@ -50,7 +54,7 @@ resource "aws_db_instance" "main" {
 
   # Engine configuration
   engine         = "postgres"
-  engine_version = "15.7"
+  engine_version = "15.12"  # Specific version to avoid ambiguity
   instance_class = var.db_instance_class
 
   # Storage configuration
@@ -82,7 +86,49 @@ resource "aws_db_instance" "main" {
   skip_final_snapshot = var.environment == "prod" ? false : true
   final_snapshot_identifier = var.environment == "prod" ? "${var.project_name}-final-snapshot-${formatdate("YYYY-MM-DD-hhmm", timestamp())}" : null
 
+  # Enhanced monitoring
+  enabled_cloudwatch_logs_exports = ["postgresql", "upgrade"]
+  monitoring_interval = 60
+  monitoring_role_arn = var.environment == "prod" ? aws_iam_role.rds_monitoring[0].arn : null
+
+  # Performance Insights
+  performance_insights_enabled = var.environment == "prod" ? true : false
+  performance_insights_retention_period = var.environment == "prod" ? 7 : null
+
+  # Auto minor version upgrade
+  auto_minor_version_upgrade = true
+
+  # Copy tags to snapshots
+  copy_tags_to_snapshot = true
+
   tags = merge(var.tags, {
     Name = "${var.project_name}-database"
   })
+}
+
+# RDS Enhanced Monitoring Role
+resource "aws_iam_role" "rds_monitoring" {
+  count = var.environment == "prod" ? 1 : 0
+  name  = "${var.project_name}-rds-monitoring-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "monitoring.rds.amazonaws.com"
+        }
+      }
+    ]
+  })
+
+  tags = var.tags
+}
+
+resource "aws_iam_role_policy_attachment" "rds_monitoring" {
+  count      = var.environment == "prod" ? 1 : 0
+  role       = aws_iam_role.rds_monitoring[0].name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole"
 }
