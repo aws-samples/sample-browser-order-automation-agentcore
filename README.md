@@ -1,12 +1,12 @@
-# Browser Order Automation with Amazon Bedrock AgentCore (Sample)
+# Browser Order Automation with Amazon Bedrock AgentCore
 
-A scalable, AI-powered e-commerce order automation sample application built on Amazon Bedrock AgentCore with secure browser automation and intelligent agent orchestration capabilities.
+A sample e-commerce order automation application built on Amazon Bedrock AgentCore Browser with Nova Act, Strands Agent, and Playwright MCP for secure browser automation and intelligent agent orchestration capabilities.
 
 **Note**: This is a sample application for demonstration purposes. Review and modify security settings, resource configurations, and access policies according to your organization's requirements before deploying to production environments.
 
 ## Key Features
 
-- **AI-Powered Automation**: Amazon Bedrock Claude models (Sonnet 4, Opus 4.1) for intelligent order processing
+- **AI-Powered Automation**: Nova Act or Amazon Bedrock models (e.g. Sonnet 4, Opus 4.1) for intelligent order processing
 - **Secure Browser Automation**: Amazon Bedrock AgentCore Browser Tool provides isolated, managed browser environment
 - **Multi-Agent Architecture**: Strands Agent orchestrates Nova Act and Playwright MCP agents for complex workflows
 - **Real-time Monitoring**: WebSocket connections for live order tracking and browser session viewing

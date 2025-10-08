@@ -6,7 +6,19 @@ resource "aws_lb" "main" {
   security_groups    = [aws_security_group.alb.id]
   subnets            = aws_subnet.public[*].id
 
-  enable_deletion_protection = false
+  enable_deletion_protection = var.environment == "prod" ? true : false
+  drop_invalid_header_fields = true
+
+  # Enable access logs for production
+  # Temporarily disabled until S3 bucket policy is properly configured
+  # dynamic "access_logs" {
+  #   for_each = var.environment == "prod" ? [1] : []
+  #   content {
+  #     bucket  = aws_s3_bucket.alb_logs[0].bucket
+  #     prefix  = "alb-logs"
+  #     enabled = true
+  #   }
+  # }
 
   tags = var.tags
 }

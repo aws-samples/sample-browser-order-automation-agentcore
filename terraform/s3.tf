@@ -9,6 +9,83 @@ resource "random_id" "bucket_suffix" {
   byte_length = 4
 }
 
+# S3 bucket for ALB access logs (only in production)
+resource "aws_s3_bucket" "alb_logs" {
+  count  = var.environment == "prod" ? 1 : 0
+  bucket = "${var.project_name}-alb-logs-${random_id.bucket_suffix.hex}"
+
+  tags = var.tags
+}
+
+resource "aws_s3_bucket_public_access_block" "alb_logs" {
+  count  = var.environment == "prod" ? 1 : 0
+  bucket = aws_s3_bucket.alb_logs[0].id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "alb_logs" {
+  count  = var.environment == "prod" ? 1 : 0
+  bucket = aws_s3_bucket.alb_logs[0].id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+# S3 bucket policy for ALB access logs
+resource "aws_s3_bucket_policy" "alb_logs" {
+  count  = var.environment == "prod" ? 1 : 0
+  bucket = aws_s3_bucket.alb_logs[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AWSLogDeliveryWrite"
+        Effect = "Allow"
+        Principal = {
+          Service = "elasticloadbalancing.amazonaws.com"
+        }
+        Action   = "s3:PutObject"
+        Resource = "${aws_s3_bucket.alb_logs[0].arn}/*"
+      },
+      {
+        Sid    = "AWSLogDeliveryAclCheck"
+        Effect = "Allow"
+        Principal = {
+          Service = "elasticloadbalancing.amazonaws.com"
+        }
+        Action   = "s3:GetBucketAcl"
+        Resource = aws_s3_bucket.alb_logs[0].arn
+      }
+    ]
+  })
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "alb_logs" {
+  count  = var.environment == "prod" ? 1 : 0
+  bucket = aws_s3_bucket.alb_logs[0].id
+
+  rule {
+    id     = "cleanup_old_logs"
+    status = "Enabled"
+
+    filter {
+      prefix = ""
+    }
+
+    expiration {
+      days = 90
+    }
+  }
+}
+
 resource "aws_s3_bucket_versioning" "static_assets" {
   bucket = aws_s3_bucket.static_assets.id
   versioning_configuration {
@@ -75,7 +152,10 @@ resource "aws_s3_bucket_cors_configuration" "app_data" {
   cors_rule {
     allowed_headers = ["*"]
     allowed_methods = ["GET", "POST", "PUT", "DELETE", "HEAD"]
-    allowed_origins = ["*"]
+    # Restrict CORS origins in production
+    allowed_origins = var.environment == "prod" ? (
+      var.domain_name != "" ? ["https://${var.domain_name}"] : ["https://*.cloudfront.net"]
+    ) : ["*"]
     expose_headers  = [
       "ETag", 
       "x-amz-meta-original-filename", 

@@ -230,6 +230,14 @@ resource "aws_iam_role_policy" "ecs_task" {
         Resource = "*"
       },
       {
+        Sid = "SecretsManagerListAccess"
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:ListSecrets"
+        ]
+        Resource = "*"
+      },
+      {
         Sid = "SecretsManagerAccess"
         Effect = "Allow"
         Action = [
@@ -237,7 +245,6 @@ resource "aws_iam_role_policy" "ecs_task" {
           "secretsmanager:CreateSecret",
           "secretsmanager:UpdateSecret",
           "secretsmanager:DeleteSecret",
-          "secretsmanager:ListSecrets",
           "secretsmanager:DescribeSecret",
           "secretsmanager:PutSecretValue",
           "secretsmanager:TagResource"

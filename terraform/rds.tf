@@ -22,6 +22,7 @@ resource "aws_security_group" "rds" {
   }
 
   egress {
+    description = "Allow outbound traffic for RDS"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
@@ -46,6 +47,10 @@ resource "random_password" "db_password" {
   min_upper = 1
   min_numeric = 1
   min_special = 1
+  
+  lifecycle {
+    ignore_changes = all
+  }
 }
 
 # RDS Instance
@@ -80,6 +85,9 @@ resource "aws_db_instance" "main" {
 
   # Multi-AZ for production
   multi_az = var.db_multi_az
+
+  # IAM database authentication for enhanced security
+  iam_database_authentication_enabled = var.environment == "prod" ? true : false
 
   # Deletion protection
   deletion_protection = var.environment == "prod" ? true : false

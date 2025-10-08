@@ -89,7 +89,7 @@ Documentation: ${replayInfo.documentation_url || 'https://docs.aws.amazon.com/be
       `;
       
       navigator.clipboard.writeText(instructions.trim());
-      alert('Session replay CLI commands copied to clipboard!');
+      console.log('Session replay CLI commands copied to clipboard!');
     } else if (replayInfo?.s3_bucket && replayInfo?.s3_prefix) {
       // Fallback for older API response format
       const instructions = `
@@ -104,7 +104,7 @@ python view_recordings.py --bucket ${replayInfo.s3_bucket} --prefix ${replayInfo
       `;
       
       navigator.clipboard.writeText(instructions.trim());
-      alert('Session replay CLI commands copied to clipboard!');
+      console.log('Session replay CLI commands copied to clipboard!');
     }
   };
 

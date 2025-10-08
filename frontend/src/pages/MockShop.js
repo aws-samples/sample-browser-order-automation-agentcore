@@ -373,7 +373,7 @@ const MockShop = () => {
                     cursor: 'pointer'
                   }}
                   onClick={() => {
-                    alert(`Order placed! Total: $${getTotalPrice().toLocaleString()}`);
+                    console.log(`Order placed! Total: $${getTotalPrice().toLocaleString()}`);
                     setCart([]);
                     setShowCart(false);
                   }}

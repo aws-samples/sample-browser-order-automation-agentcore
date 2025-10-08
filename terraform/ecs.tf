@@ -26,12 +26,67 @@ resource "aws_ecs_cluster_capacity_providers" "main" {
   }
 }
 
+# KMS Key for CloudWatch Logs encryption
+resource "aws_kms_key" "cloudwatch_logs" {
+  description             = "KMS key for CloudWatch Logs encryption"
+  deletion_window_in_days = 7
+  enable_key_rotation     = true
+  
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "Enable IAM User Permissions"
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+        }
+        Action   = "kms:*"
+        Resource = "*"
+      },
+      {
+        Sid    = "Allow CloudWatch Logs"
+        Effect = "Allow"
+        Principal = {
+          Service = "logs.${var.aws_region}.amazonaws.com"
+        }
+        Action = [
+          "kms:Encrypt",
+          "kms:Decrypt",
+          "kms:ReEncrypt*",
+          "kms:GenerateDataKey*",
+          "kms:CreateGrant",
+          "kms:DescribeKey"
+        ]
+        Resource = "*"
+        Condition = {
+          ArnLike = {
+            "kms:EncryptionContext:aws:logs:arn" = "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/ecs/${var.project_name}"
+          }
+        }
+      }
+    ]
+  })
+  
+  tags = merge(var.tags, {
+    Name = "${var.project_name}-cloudwatch-logs-key"
+  })
+}
+
+resource "aws_kms_alias" "cloudwatch_logs" {
+  name          = "alias/${var.project_name}-cloudwatch-logs"
+  target_key_id = aws_kms_key.cloudwatch_logs.key_id
+}
+
 # CloudWatch Log Group
 resource "aws_cloudwatch_log_group" "ecs" {
   name              = "/ecs/${var.project_name}"
   retention_in_days = 7
+  kms_key_id        = aws_kms_key.cloudwatch_logs.arn
 
   tags = var.tags
+  
+  depends_on = [aws_kms_key.cloudwatch_logs]
 }
 
 # ECS Task Definition
@@ -67,7 +122,7 @@ resource "aws_ecs_task_definition" "app" {
         },
         {
           name  = "DATABASE_URL"
-          value = "postgresql://${aws_db_instance.main.username}:${random_password.db_password.result}@${aws_db_instance.main.endpoint}/${aws_db_instance.main.db_name}"
+          value = "postgresql://${aws_db_instance.main.username}:${random_password.db_password.result}@${aws_db_instance.main.endpoint}/${aws_db_instance.main.db_name}?sslmode=require"
         },
         {
           name  = "ENVIRONMENT"

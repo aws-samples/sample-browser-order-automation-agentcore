@@ -11,11 +11,25 @@ class WebSocketService {
   private maxReconnectAttempts = 5;
   private reconnectDelay = 1000;
 
-  connect(url: string = 'ws://localhost:8000'): Promise<void> {
+  connect(url?: string): Promise<void> {
     return new Promise((resolve, reject) => {
       try {
-        // Create WebSocket connection (not socket.io for this simple case)
-        const wsUrl = url.replace('http://', 'ws://').replace('https://', 'wss://');
+        // Use environment-based URL or provided URL
+        const baseUrl = url || process.env.REACT_APP_API_URL || window.location.origin;
+        
+        // Always use secure WebSocket (wss://) in production
+        // Only allow insecure (ws://) for localhost development
+        const isLocalhost = baseUrl.includes('localhost') || baseUrl.includes('127.0.0.1');
+        const isDevelopment = process.env.NODE_ENV === 'development' && isLocalhost;
+        
+        let wsUrl: string;
+        if (isDevelopment) {
+          // Development: allow ws:// for localhost only
+          wsUrl = baseUrl.replace('http://', 'ws://').replace('https://', 'wss://');
+        } else {
+          // Production: force wss:// always
+          wsUrl = baseUrl.replace('http://', 'wss://').replace('https://', 'wss://');
+        }
         const ws = new WebSocket(`${wsUrl}/ws`);
 
         ws.onopen = () => {

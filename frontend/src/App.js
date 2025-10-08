@@ -199,7 +199,7 @@ function AppContent() {
                 <h3>Learn more</h3>
                 <ul>
                   <li><Link external href="https://aws.amazon.com/bedrock/">Amazon Bedrock</Link></li>
-                  <li><Link external href="https://docs.aws.amazon.com/bedrock/latest/userguide/agents.html">Bedrock Agents</Link></li>
+                  <li><Link external href="https://aws.amazon.com/bedrock/agentcore/">Bedrock AgentCore</Link></li>
                   <li><Link external href="https://github.com/anthropics/anthropic-sdk-python">Nova Act SDK</Link></li>
                 </ul>
               </div>

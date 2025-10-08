@@ -103,13 +103,15 @@ class StrandsAgent:
         async with self._session_lock:
             # Check if session already exists
             if session_id in self._active_sessions:
-                self._add_log("WARNING", f"Session {session_id} already active", "initialization")
+                self._add_log(
+                    "WARNING", f"Session {session_id} already active", "initialization"
+                )
                 return {
                     "session_id": session_id,
                     "status": "already_active",
                     "automation_method": "strands",
                 }
-            
+
             try:
                 self.session_id = session_id
                 self._active_sessions.add(session_id)
@@ -200,8 +202,8 @@ class StrandsAgent:
                             env={
                                 **os.environ,
                                 "NODE_OPTIONS": "--max-old-space-size=2048",
-                                "UV_THREADPOOL_SIZE": "4"
-                            }
+                                "UV_THREADPOOL_SIZE": "4",
+                            },
                         )
                     )
                 )
@@ -210,12 +212,16 @@ class StrandsAgent:
                 def initialize_mcp_tools():
                     tools = []
                     max_retries = 3
-                    
+
                     for attempt in range(max_retries):
                         mcp_context = None
                         try:
-                            self._add_log("INFO", f"Attempting MCP initialization (attempt {attempt + 1})", "initialization")
-                            
+                            self._add_log(
+                                "INFO",
+                                f"Attempting MCP initialization (attempt {attempt + 1})",
+                                "initialization",
+                            )
+
                             # Create fresh MCP client for each attempt
                             if attempt > 0:
                                 # Recreate MCP client on retry
@@ -238,25 +244,29 @@ class StrandsAgent:
                                             env={
                                                 **os.environ,
                                                 "NODE_OPTIONS": "--max-old-space-size=2048",
-                                                "UV_THREADPOOL_SIZE": "4"
-                                            }
+                                                "UV_THREADPOOL_SIZE": "4",
+                                            },
                                         )
                                     )
                                 )
-                            
+
                             mcp_context = self.mcp_client.__enter__()
                             tools = self.mcp_client.list_tools_sync()
                             self._add_log(
-                                "INFO", f"Successfully loaded {len(tools)} MCP tools", "initialization"
+                                "INFO",
+                                f"Successfully loaded {len(tools)} MCP tools",
+                                "initialization",
                             )
                             break
-                            
+
                         except Exception as e:
                             error_msg = str(e)
                             self._add_log(
-                                "WARNING", f"MCP initialization failed (attempt {attempt + 1}): {error_msg}", "initialization"
+                                "WARNING",
+                                f"MCP initialization failed (attempt {attempt + 1}): {error_msg}",
+                                "initialization",
                             )
-                            
+
                             # Cleanup failed context
                             if mcp_context:
                                 try:
@@ -264,21 +274,29 @@ class StrandsAgent:
                                 except:
                                     pass
                                 mcp_context = None
-                            
+
                             # Check for specific error types
-                            if "Connection closed" in error_msg or "client initialization failed" in error_msg:
+                            if (
+                                "Connection closed" in error_msg
+                                or "client initialization failed" in error_msg
+                            ):
                                 if attempt < max_retries - 1:
                                     wait_time = (attempt + 1) * 2
                                     self._add_log(
-                                        "INFO", f"Connection issue detected, waiting {wait_time}s before retry", "initialization"
+                                        "INFO",
+                                        f"Connection issue detected, waiting {wait_time}s before retry",
+                                        "initialization",
                                     )
                                     import time
+
                                     time.sleep(wait_time)
                                     continue
-                            
+
                             if attempt == max_retries - 1:
                                 self._add_log(
-                                    "ERROR", f"Failed to initialize MCP after {max_retries} attempts", "initialization"
+                                    "ERROR",
+                                    f"Failed to initialize MCP after {max_retries} attempts",
+                                    "initialization",
                                 )
                         finally:
                             # Always cleanup MCP context if still active
@@ -287,19 +305,26 @@ class StrandsAgent:
                                     self.mcp_client.__exit__(None, None, None)
                                 except:
                                     pass
-                    
+
                     return tools
 
                 # Load tools in thread pool with proper cleanup
                 import concurrent.futures
+
                 executor = None
                 try:
-                    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="mcp-init")
+                    executor = concurrent.futures.ThreadPoolExecutor(
+                        max_workers=1, thread_name_prefix="mcp-init"
+                    )
                     future = executor.submit(initialize_mcp_tools)
                     try:
-                        tools = await asyncio.wait_for(asyncio.wrap_future(future), timeout=60.0)
+                        tools = await asyncio.wait_for(
+                            asyncio.wrap_future(future), timeout=60.0
+                        )
                     except asyncio.TimeoutError:
-                        self._add_log("ERROR", "MCP initialization timed out", "initialization")
+                        self._add_log(
+                            "ERROR", "MCP initialization timed out", "initialization"
+                        )
                         future.cancel()
                         tools = []
                 finally:
@@ -311,26 +336,38 @@ class StrandsAgent:
 
                 # Use more conservative Bedrock settings for stability
                 # Use the model specified in config (passed from order), not default_model
-                model_to_use = self.agent_config.get("model") or self.agent_config.get("default_model")
-                self._add_log("INFO", f"Using AI model: {model_to_use}", "initialization")
-                
+                model_to_use = self.agent_config.get("model") or self.agent_config.get(
+                    "default_model"
+                )
+                self._add_log(
+                    "INFO", f"Using AI model: {model_to_use}", "initialization"
+                )
+
                 # Enable prompt caching only for Claude Sonnet 3.7 and 4
                 supports_caching = (
-                    "claude-3-7-sonnet" in model_to_use or 
-                    "claude-sonnet-4" in model_to_use
+                    "claude-3-7-sonnet" in model_to_use
+                    or "claude-sonnet-4" in model_to_use
                 )
-                
+
                 if supports_caching:
-                    self._add_log("INFO", "Enabling prompt caching for Claude model", "initialization")
+                    self._add_log(
+                        "INFO",
+                        "Enabling prompt caching for Claude model",
+                        "initialization",
+                    )
                     bedrock_model = BedrockModel(
                         model_id=model_to_use,
                         region_name=self.region,
                         cache_prompt="default",  # Use default caching
-                        cache_tools="default",   # Use default caching
+                        cache_tools="default",  # Use default caching
                         max_tokens=4000,  # Limit token usage
                     )
                 else:
-                    self._add_log("INFO", "Disabling prompt caching for non-Claude model", "initialization")
+                    self._add_log(
+                        "INFO",
+                        "Disabling prompt caching for non-Claude model",
+                        "initialization",
+                    )
                     bedrock_model = BedrockModel(
                         model_id=model_to_use,
                         region_name=self.region,
@@ -340,10 +377,9 @@ class StrandsAgent:
 
                 # Create model-specific system prompt
                 supports_images = (
-                    "claude" in model_to_use.lower() or 
-                    "nova" in model_to_use.lower()
+                    "claude" in model_to_use.lower() or "nova" in model_to_use.lower()
                 )
-                
+
                 if supports_images:
                     system_prompt = f"""You are an autonomous e-commerce automation agent. You MUST use the provided Playwright browser tools to complete orders.
 
@@ -412,9 +448,13 @@ IMPORTANT: This model does not support image content. Do NOT use screenshot tool
 
 Region: {self.region}
 """
-                
-                self._add_log("INFO", f"Using {'image-capable' if supports_images else 'text-only'} system prompt", "initialization")
-                
+
+                self._add_log(
+                    "INFO",
+                    f"Using {'image-capable' if supports_images else 'text-only'} system prompt",
+                    "initialization",
+                )
+
                 self.strands_agent = Agent(
                     model=bedrock_model,
                     tools=tools,
@@ -422,7 +462,9 @@ Region: {self.region}
                 )
 
                 self._add_log(
-                    "INFO", f"Session {session_id} started successfully", "initialization"
+                    "INFO",
+                    f"Session {session_id} started successfully",
+                    "initialization",
                 )
                 return {
                     "session_id": session_id,
@@ -448,7 +490,7 @@ Region: {self.region}
                 "error": "Another order is already being processed",
                 "automation_method": "strands",
             }
-        
+
         self._is_processing = True
         try:
             order_id = order.id
@@ -536,31 +578,48 @@ STEP 5: Proceed to checkout
 
             # Execute with MCP client context in separate thread to avoid blocking
             self._add_log("INFO", "Starting Strands agent execution", "automation")
-            
+
             def execute_automation():
                 new_loop = None
                 mcp_context = None
                 try:
                     # Create new event loop for this thread
                     import asyncio
+
                     new_loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(new_loop)
-                    
+
                     try:
                         mcp_context = self.mcp_client.__enter__()
-                        self._add_log("INFO", "MCP client context established", "automation")
-                        
+                        self._add_log(
+                            "INFO", "MCP client context established", "automation"
+                        )
+
                         # Add retry logic for throttling
                         max_retries = 3
                         for attempt in range(max_retries):
                             try:
-                                self._add_log("INFO", f"Calling Strands agent (attempt {attempt + 1})", "automation")
+                                self._add_log(
+                                    "INFO",
+                                    f"Calling Strands agent (attempt {attempt + 1})",
+                                    "automation",
+                                )
                                 response = self.strands_agent(instruction)
-                                self._add_log("INFO", f"Strands agent responded: {str(response)}", "automation")
+                                self._add_log(
+                                    "INFO",
+                                    f"Strands agent responded: {str(response)}",
+                                    "automation",
+                                )
                                 return str(response)
                             except Exception as e:
-                                self._add_log("ERROR", f"Strands agent error (attempt {attempt + 1}): {e}", "automation")
-                                if "throttlingException" in str(e) or "Too many requests" in str(e):
+                                self._add_log(
+                                    "ERROR",
+                                    f"Strands agent error (attempt {attempt + 1}): {e}",
+                                    "automation",
+                                )
+                                if "throttlingException" in str(
+                                    e
+                                ) or "Too many requests" in str(e):
                                     if attempt < max_retries - 1:
                                         wait_time = (attempt + 1) * 10
                                         self._add_log(
@@ -569,6 +628,7 @@ STEP 5: Proceed to checkout
                                             "automation",
                                         )
                                         import time
+
                                         time.sleep(wait_time)
                                         continue
                                 if attempt == max_retries - 1:
@@ -582,10 +642,16 @@ STEP 5: Proceed to checkout
                             try:
                                 self.mcp_client.__exit__(None, None, None)
                             except Exception as cleanup_error:
-                                self._add_log("WARNING", f"MCP cleanup error: {cleanup_error}", "automation")
-                        
+                                self._add_log(
+                                    "WARNING",
+                                    f"MCP cleanup error: {cleanup_error}",
+                                    "automation",
+                                )
+
                 except Exception as e:
-                    self._add_log("ERROR", f"Automation thread error: {e}", "automation")
+                    self._add_log(
+                        "ERROR", f"Automation thread error: {e}", "automation"
+                    )
                     return f"FAILED: {e}"
                 finally:
                     # Always cleanup event loop
@@ -599,9 +665,9 @@ STEP 5: Proceed to checkout
             executor = None
             try:
                 import concurrent.futures
+
                 executor = concurrent.futures.ThreadPoolExecutor(
-                    max_workers=1, 
-                    thread_name_prefix=f"strands-{self.session_id[:8]}"
+                    max_workers=1, thread_name_prefix=f"strands-{self.session_id[:8]}"
                 )
                 future = executor.submit(execute_automation)
                 try:
@@ -790,7 +856,9 @@ STEP 5: Proceed to checkout
         async with self._session_lock:
             cleanup_errors = []
             try:
-                self._add_log("INFO", f"Cleaning up session {self.session_id}", "cleanup")
+                self._add_log(
+                    "INFO", f"Cleaning up session {self.session_id}", "cleanup"
+                )
 
                 # Remove from active sessions first
                 if self.session_id:
@@ -813,6 +881,7 @@ STEP 5: Proceed to checkout
                     try:
                         # Force cleanup with timeout to prevent hanging
                         import concurrent.futures
+
                         def cleanup_mcp():
                             try:
                                 # MCP client cleanup is handled by context manager
@@ -820,15 +889,21 @@ STEP 5: Proceed to checkout
                             except Exception as e:
                                 return str(e)
                             return None
-                        
-                        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+
+                        with concurrent.futures.ThreadPoolExecutor(
+                            max_workers=1
+                        ) as executor:
                             future = executor.submit(cleanup_mcp)
                             try:
-                                error = await asyncio.wait_for(asyncio.wrap_future(future), timeout=5.0)
+                                error = await asyncio.wait_for(
+                                    asyncio.wrap_future(future), timeout=5.0
+                                )
                                 if error:
                                     cleanup_errors.append(f"MCP cleanup: {error}")
                                 else:
-                                    self._add_log("INFO", "MCP client cleaned up", "cleanup")
+                                    self._add_log(
+                                        "INFO", "MCP client cleaned up", "cleanup"
+                                    )
                             except asyncio.TimeoutError:
                                 cleanup_errors.append("MCP cleanup timed out")
                                 future.cancel()
@@ -848,7 +923,9 @@ STEP 5: Proceed to checkout
                 if self.browser_service and self.session_id:
                     try:
                         self.browser_service.cleanup_session(self.session_id)
-                        self._add_log("INFO", "Unregistered from BrowserService", "cleanup")
+                        self._add_log(
+                            "INFO", "Unregistered from BrowserService", "cleanup"
+                        )
                     except Exception as e:
                         cleanup_errors.append(f"BrowserService cleanup: {e}")
 
@@ -866,5 +943,5 @@ STEP 5: Proceed to checkout
             except Exception as e:
                 error_msg = f"Critical cleanup error: {e}"
                 logger.error(error_msg)
-                if hasattr(self, '_add_log'):
+                if hasattr(self, "_add_log"):
                     self._add_log("ERROR", error_msg, "cleanup")

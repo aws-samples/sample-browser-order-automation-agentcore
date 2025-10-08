@@ -29,10 +29,16 @@ provider "aws" {
 # ECR repository for Docker images
 resource "aws_ecr_repository" "order_automation" {
   name                 = "${var.project_name}-app"
+  # Keep MUTABLE for now to avoid deployment issues
+  # TODO: Switch to IMMUTABLE in production with proper versioning strategy
   image_tag_mutability = "MUTABLE"
 
   image_scanning_configuration {
     scan_on_push = true
+  }
+
+  encryption_configuration {
+    encryption_type = "AES256"
   }
 
   tags = var.tags
