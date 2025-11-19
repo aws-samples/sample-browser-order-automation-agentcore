@@ -318,10 +318,11 @@ const Settings = ({ addNotification }) => {
       session_replay_s3_prefix: 'session-replays/',
       browser_session_timeout: 3600,
       max_concurrent_orders: 5,
-      default_model: 'us.anthropic.claude-sonnet-4-20250514-v1:0',
+      default_model: 'global.anthropic.claude-sonnet-4-5-20250929-v1:0',
       nova_act_api_key: '',
       execution_role_arn: '',
-      processing_timeout: 1800
+      processing_timeout: 1800,
+      browser_signing_enabled: true
     };
 
     setSystemConfig(defaultConfig);
@@ -437,19 +438,24 @@ const Settings = ({ addNotification }) => {
           <FormField label="Foundation Model" description="Amazon Bedrock foundation model for Strands automation agents">
             <Select
               selectedOption={{
-                label: systemConfig.default_model?.includes('claude-sonnet-4') ? 'Claude Sonnet 4' :
-                  systemConfig.default_model?.includes('claude-3-7-sonnet') ? 'Claude 3.7 Sonnet' :
-                    systemConfig.default_model?.includes('nova-pro') ? 'Amazon Nova Pro' :
-                      systemConfig.default_model?.includes('gpt-oss-120b') ? 'GPT-OSS 120B' :
-                        systemConfig.default_model?.includes('gpt-oss-20b') ? 'GPT-OSS 20B' :
-                          systemConfig.default_model?.includes('deepseek.v3') ? 'DeepSeek V3' :
-                            'Claude Sonnet 4',
-                value: systemConfig.default_model || 'us.anthropic.claude-sonnet-4-20250514-v1:0'
+                label: systemConfig.default_model?.includes('claude-sonnet-4-5') ? 'Claude Sonnet 4.5 (Global)' :
+                  systemConfig.default_model?.includes('claude-sonnet-4') ? 'Claude Sonnet 4' :
+                    systemConfig.default_model?.includes('claude-3-7-sonnet') ? 'Claude 3.7 Sonnet' :
+                      systemConfig.default_model?.includes('nova-pro') ? 'Amazon Nova Pro' :
+                        systemConfig.default_model?.includes('gpt-oss-120b') ? 'GPT-OSS 120B' :
+                          systemConfig.default_model?.includes('gpt-oss-20b') ? 'GPT-OSS 20B' :
+                            systemConfig.default_model?.includes('deepseek.v3') ? 'DeepSeek V3' :
+                              'Claude Sonnet 4.5 (Global)',
+                value: systemConfig.default_model || 'global.anthropic.claude-sonnet-4-5-20250929-v1:0'
               }}
               onChange={({ detail }) =>
                 handleConfigChange('default_model', detail.selectedOption.value)
               }
               options={[
+                {
+                  label: 'Claude Sonnet 4.5 (Global)',
+                  value: 'global.anthropic.claude-sonnet-4-5-20250929-v1:0'
+                },
                 {
                   label: 'Claude Sonnet 4',
                   value: 'us.anthropic.claude-sonnet-4-20250514-v1:0'
@@ -505,6 +511,30 @@ const Settings = ({ addNotification }) => {
               placeholder={isEditingApiKey || !originalConfig.nova_act_api_key ? "Enter Nova Act API key" : ""}
               invalid={systemConfig.nova_act_api_key && !validateNovaActApiKey(systemConfig.nova_act_api_key)}
             />
+          </FormField>
+        </SpaceBetween>
+      </Container>
+
+      {/* Browser Security & Authentication */}
+      <Container header={<Header variant="h2">Browser Security & Authentication</Header>}>
+        <SpaceBetween size="m">
+          <FormField 
+            label="Web Bot Auth (Preview)" 
+            description="Enable cryptographic authentication to reduce CAPTCHA challenges. Uses IETF Web Bot Auth protocol to verify agent identity with Cloudflare, HUMAN Security, and Akamai Technologies."
+            info={
+              <a href="https://aws.amazon.com/blogs/machine-learning/reduce-captchas-for-ai-agents-browsing-the-web-with-web-bot-auth-preview-in-amazon-bedrock-agentcore-browser/" target="_blank" rel="noopener noreferrer">
+                Learn more about Web Bot Auth
+              </a>
+            }
+          >
+            <Toggle
+              onChange={({ detail }) => 
+                handleConfigChange('browser_signing_enabled', detail.checked)
+              }
+              checked={systemConfig.browser_signing_enabled !== false}
+            >
+              Enable Web Bot Auth to reduce CAPTCHA friction
+            </Toggle>
           </FormField>
         </SpaceBetween>
       </Container>

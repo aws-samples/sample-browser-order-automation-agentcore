@@ -10,6 +10,7 @@ A sample e-commerce order automation application built on Amazon Bedrock AgentCo
 
 - **AI-Powered Automation**: Nova Act or Amazon Bedrock models (e.g. Sonnet 4, Opus 4.1) for intelligent order processing
 - **Secure Browser Automation**: Amazon Bedrock AgentCore Browser Tool provides isolated, managed browser environment
+- **Web Bot Auth (Preview)**: Cryptographic authentication to reduce CAPTCHA challenges using IETF Web Bot Auth protocol
 - **Multi-Agent Architecture**: Strands Agent orchestrates Nova Act and Playwright MCP agents for complex workflows
 - **Real-time Monitoring**: WebSocket connections for live order tracking and browser session viewing
 - **Human-in-the-Loop**: Manual intervention with live browser view, session replay, and manual control takeover
@@ -198,6 +199,11 @@ terraform apply
 - **Session Replay**: Recorded sessions for completed orders
 - **Manual Control**: Human takeover capability during automation
 - **Screenshot Capture**: Automatic screenshots at each automation step
+- **Web Bot Auth (Preview)**: Cryptographic request signing to reduce CAPTCHA friction
+  - Verifiable agent identity using IETF HTTP Message Signatures protocol
+  - Automatic integration with Cloudflare, HUMAN Security, and Akamai Technologies
+  - Enabled by default for all browser sessions
+  - Configurable in Settings → Browser Security & Authentication
 
 ### Secret Management
 - **AWS Secrets Manager**: Encrypted credential storage with KMS
@@ -311,6 +317,12 @@ const ws = new WebSocket('ws://localhost:8000/ws');
 - **Isolated Sessions**: AgentCore Browser Tool provides containerized environments
 - **Session Cleanup**: Automatic cleanup after order completion
 - **Access Logging**: Detailed audit logs for all browser interactions
+- **Web Bot Auth**: Cryptographic authentication reduces CAPTCHA challenges
+  - Based on draft IETF Web Bot Auth protocol
+  - Provides verifiable agent identity to websites
+  - Works with Cloudflare, HUMAN Security, and Akamai Technologies
+  - Domain owners retain full control over bot policies
+  - Learn more: [AWS Blog Post](https://aws.amazon.com/blogs/machine-learning/reduce-captchas-for-ai-agents-browsing-the-web-with-web-bot-auth-preview-in-amazon-bedrock-agentcore-browser/)
 
 ## Deployment
 

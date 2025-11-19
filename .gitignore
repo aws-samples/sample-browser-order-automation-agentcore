@@ -69,6 +69,7 @@ terraform/*.tfplan
 terraform/terraform.tfvars
 terraform/crash.log
 terraform/.terraform.tfstate.lock.info
+.terraform-build/
 
 # AWS
 .aws/
@@ -139,3 +140,5 @@ temp/
 # CSV files
 *.csv
 !sample_shopzone.csv
+
+todo.md

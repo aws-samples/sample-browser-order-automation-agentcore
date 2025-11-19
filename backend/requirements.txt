@@ -1,63 +1,63 @@
-# Core Framework
-fastapi>=0.104.0
-uvicorn[standard]>=0.24.0
-pydantic>=2.5.0
-python-multipart>=0.0.6
+# Core Framework (pinned for stability)
+fastapi~=0.120.3
+uvicorn[standard]>=0.34.2  # Required by bedrock-agentcore
+pydantic~=2.12.4  # Compatible with Strands 1.13+ and Nova Act SDK
+python-multipart>=0.0.20
 
-# Strands Agents SDK
-strands-agents>=1.6.0
-strands-agents-tools>=0.2.5
+# Strands Agents SDK (pinned for compatibility)
+strands-agents~=1.14.0
+strands-agents-tools~=0.2.13
 
-# AWS & Bedrock
-boto3>=1.34.0
-botocore>=1.34.0
-bedrock-agentcore>=0.1.5
+# AWS & Bedrock (pinned for stability)
+boto3~=1.40.63
+botocore~=1.40.63
+bedrock-agentcore~=1.0.5
 
-# LLM Providers
-anthropic>=0.7.0
+# LLM Providers (pinned for API compatibility)
+anthropic~=0.72.0
 
-# Browser Automation
-playwright>=1.40.0
-nest-asyncio>=1.5.8
-nova-act>=0.1.0
+# Browser Automation (pinned for stability)
+playwright>=1.54.0  # Required by nova-act
+nest-asyncio>=1.6.0
+nova-act~=2.3.18
 
-# MCP (Model Context Protocol)
-mcp>=1.11.0
+# MCP (Model Context Protocol) (pinned for protocol compatibility)
+mcp~=1.20.0
 
 # HTTP Client (compatible with MCP requirements)
-httpx>=0.27.0
+httpx~=0.28.1
 
-# Database
-sqlalchemy>=2.0.23
-psycopg2-binary>=2.9.9
-alembic>=1.13.0
+# Database (pinned for schema compatibility)
+sqlalchemy~=2.0.36
+psycopg2-binary~=2.9.10
+alembic~=1.14.0
 
-# WebSocket & Real-time
-websockets>=12.0
-python-socketio>=5.10.0
+# WebSocket & Real-time (flexible for bug fixes)
+websockets>=15.0.1
+python-socketio>=5.12.0
 
-# Image Processing (for thumbnails)
-Pillow>=10.1.0
-opencv-python>=4.8.1.78
+# Image Processing (flexible for bug fixes)
+Pillow>=11.3.0
+opencv-python>=4.12.0
 
-# Utilities
-python-dotenv>=1.0.0
-pydantic-settings>=2.1.0
-aiofiles>=23.2.1
+# Utilities (flexible for bug fixes)
+python-dotenv>=1.2.1
+pydantic-settings~=2.11.0
+aiofiles>=24.1.0
 python-jose[cryptography]>=3.3.0
-beautifulsoup4>=4.12.0
+beautifulsoup4>=4.12.3
 
-# Monitoring & Logging
-structlog>=23.2.0
-rich>=13.7.0
+# Monitoring & Logging (flexible for strands-agents-tools compatibility)
+structlog>=24.4.0
+rich>=14.0.0,<15.0.0  # Required by strands-agents-tools
 
-# Testing
-pytest>=7.4.3
-pytest-asyncio>=0.21.1
-pytest-mock>=3.12.0
+# Testing (flexible for bug fixes)
+pytest>=8.4.2
+pytest-asyncio>=1.2.0
+pytest-mock>=3.15.1
 
-# Development
-black>=23.11.0
-isort>=5.12.0
-flake8>=6.1.0
-mypy>=1.7.1
+# Development (flexible for bug fixes)
+black>=25.9.0
+isort>=5.13.0
+flake8>=7.1.0
+mypy>=1.14.0

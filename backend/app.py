@@ -26,6 +26,7 @@ from fastapi import (
     File,
     UploadFile,
     Form,
+    Request,
 )
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -453,7 +454,7 @@ async def create_order(request: CreateOrderRequest, background_tasks: Background
             if request.automation_method == "nova_act":
                 ai_model = "nova_act"
             else:  # strands
-                ai_model = "us.anthropic.claude-sonnet-4-20250514-v1:0"
+                ai_model = "global.anthropic.claude-sonnet-4-5-20250929-v1:0"
 
         # Create order
         order_id = await order_queue.add_order(
@@ -597,8 +598,33 @@ async def get_order_live_view(order_id: str):
             "message": None,
         }
 
-        # Only try to get live view if order is processing
-        if order.status == OrderStatus.PROCESSING:
+        # Check if browser session is still within timeout (even for failed/completed orders)
+        session_still_valid = False
+        if order.created_at:
+            from datetime import datetime, timezone
+            from config import get_config_manager
+            
+            # Get browser session timeout from config
+            config_manager = get_config_manager(db_manager)
+            agent_config = config_manager.get_agent_config(
+                order.automation_method.value if order.automation_method else "nova_act"
+            )
+            browser_timeout = agent_config.browser_session_timeout  # seconds
+            
+            # Ensure created_at is timezone-aware
+            created_at = order.created_at
+            if created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=timezone.utc)
+            
+            # Calculate elapsed time since order creation
+            elapsed_seconds = (datetime.now(timezone.utc) - created_at).total_seconds()
+            session_still_valid = elapsed_seconds < browser_timeout
+            
+            if session_still_valid:
+                response_data["session_timeout_remaining"] = int(browser_timeout - elapsed_seconds)
+        
+        # Try to get live view if order is processing OR if session is still valid
+        if order.status == OrderStatus.PROCESSING or session_still_valid:
             try:
                 # Get the active agent from the queue
                 active_agent = await order_queue.get_active_agent(order_id)
@@ -619,7 +645,11 @@ async def get_order_live_view(order_id: str):
                                     "live_view_type": live_view_info.get("type", "dcv"),
                                     "live_view_headers": live_view_info.get("headers"),
                                     "live_view_available": True,
-                                    "message": "Live view is available",
+                                    "message": "Live view is available" + (
+                                        f" (session expires in {response_data.get('session_timeout_remaining', 0) // 60} minutes)"
+                                        if session_still_valid and order.status != OrderStatus.PROCESSING
+                                        else ""
+                                    ),
                                 }
                             )
                         elif isinstance(live_view_info, str):
@@ -630,7 +660,11 @@ async def get_order_live_view(order_id: str):
                                     "live_view_session_id": order_id,
                                     "live_view_type": "dcv",
                                     "live_view_available": True,
-                                    "message": "Live view is available",
+                                    "message": "Live view is available" + (
+                                        f" (session expires in {response_data.get('session_timeout_remaining', 0) // 60} minutes)"
+                                        if session_still_valid and order.status != OrderStatus.PROCESSING
+                                        else ""
+                                    ),
                                 }
                             )
                         else:
@@ -643,7 +677,10 @@ async def get_order_live_view(order_id: str):
                         )
                         response_data["message"] = "Live view temporarily unavailable"
                 else:
-                    response_data["message"] = "No active agent found for this order"
+                    if session_still_valid and order.status != OrderStatus.PROCESSING:
+                        response_data["message"] = f"Browser session closed. Live view no longer available."
+                    else:
+                        response_data["message"] = "No active agent found for this order"
             except Exception as agent_error:
                 logger.warning(
                     f"Failed to get active agent for order {order_id}: {agent_error}"
@@ -651,7 +688,7 @@ async def get_order_live_view(order_id: str):
                 response_data["message"] = "Agent information temporarily unavailable"
         else:
             response_data["message"] = (
-                f"Live view only available for processing orders. Current status: {order.status.value}"
+                f"Browser session expired. Live view no longer available."
             )
 
         return response_data
@@ -751,105 +788,136 @@ async def get_presigned_url(order_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/orders/{order_id}/resume-nova-act")
-async def resume_nova_act_after_captcha(order_id: str):
-    """Resume Nova Act execution after CAPTCHA has been resolved manually"""
+@app.post("/api/orders/{order_id}/retry")
+async def retry_failed_order(order_id: str):
+    """Retry a failed order by adding it back to the queue"""
     try:
         order = db_manager.get_order(order_id)
         if not order:
             raise HTTPException(status_code=404, detail="Order not found")
 
-        # Only available for Nova Act orders that require human intervention
-        if order.automation_method != AutomationMethod.NOVA_ACT:
+        # Allow retry for failed or cancelled orders
+        if order.status not in [OrderStatus.FAILED, OrderStatus.CANCELLED]:
             raise HTTPException(
                 status_code=400,
-                detail="Nova Act resume only available for Nova Act orders",
+                detail=f"Only failed or cancelled orders can be retried. Current status: {order.status.value}",
             )
 
-        if order.status != OrderStatus.REQUIRES_HUMAN:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Order must be in 'requires_human' status to resume. Current status: {order.status.value}",
-            )
+        logger.info(f"Retrying order {order_id} (current status: {order.status.value})")
 
-        # Get the active agent from the queue
-        active_agent = await order_queue.get_active_agent(order_id)
-        if not active_agent or not hasattr(active_agent, "resume_after_captcha"):
-            raise HTTPException(
-                status_code=400,
-                detail="Nova Act agent not available or does not support resume functionality",
-            )
-
-        # Update order status to processing
-        db_manager.update_order_status(order_id, OrderStatus.PROCESSING)
-
-        # Broadcast status update
-        await broadcast_update(
-            {"type": "order_updated", "order": db_manager.get_order(order_id).to_dict()}
+        # Reset order status to pending and clear error fields
+        db_manager.update_order_status(
+            order_id=order_id,
+            status=OrderStatus.PENDING,
+            error_message=None,
+            current_step=None,
+            progress=0
         )
 
-        # Resume Nova Act execution
-        try:
-            result = await active_agent.resume_after_captcha(order)
+        # Verify the order was added back to queue
+        await order_queue.add_existing_order(order_id)
 
-            # Update order based on result
-            if result.get("success"):
-                db_manager.update_order_status(order_id, OrderStatus.COMPLETED)
-                if result.get("confirmation_number"):
-                    db_manager.update_order(
-                        order_id, {"confirmation_number": result["confirmation_number"]}
-                    )
-            elif result.get("status") == "requires_human":
-                db_manager.update_order_status(order_id, OrderStatus.REQUIRES_HUMAN)
-            else:
-                db_manager.update_order_status(order_id, OrderStatus.FAILED)
-                if result.get("error"):
-                    db_manager.update_order(order_id, {"error": result["error"]})
+        # Get updated order
+        updated_order = db_manager.get_order(order_id)
+        
+        # Broadcast update
+        await broadcast_update(
+            {"type": "order_updated", "order": updated_order.to_dict()}
+        )
 
-            # Broadcast final update
-            await broadcast_update(
-                {
-                    "type": "order_updated",
-                    "order": db_manager.get_order(order_id).to_dict(),
-                }
-            )
+        logger.info(f"Order {order_id} successfully reset to PENDING and added back to queue")
 
-            return {
-                "success": result.get("success", False),
-                "status": result.get("status", "failed"),
-                "message": result.get("result")
-                or result.get("message")
-                or result.get("error"),
-                "order_id": order_id,
-            }
-
-        except Exception as resume_error:
-            logger.error(
-                f"Failed to resume Nova Act for order {order_id}: {resume_error}"
-            )
-
-            # Update order status back to requires_human
-            db_manager.update_order_status(order_id, OrderStatus.REQUIRES_HUMAN)
-            db_manager.update_order(
-                order_id, {"error": f"Resume failed: {str(resume_error)}"}
-            )
-
-            await broadcast_update(
-                {
-                    "type": "order_updated",
-                    "order": db_manager.get_order(order_id).to_dict(),
-                }
-            )
-
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to resume Nova Act: {str(resume_error)}",
-            )
+        return {
+            "success": True,
+            "message": "Order has been reset and added back to the queue for processing",
+            "order_id": order_id,
+            "status": updated_order.status.value
+        }
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to resume Nova Act for order {order_id}: {e}")
+        logger.error(f"Failed to retry order {order_id}: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/orders/{order_id}/edit")
+async def edit_order(order_id: str, request: Request):
+    """Edit order details (instructions, product info, etc.)"""
+    try:
+        order = db_manager.get_order(order_id)
+        if not order:
+            raise HTTPException(status_code=404, detail="Order not found")
+
+        # Allow editing for failed, completed, or cancelled orders
+        if order.status not in [OrderStatus.FAILED, OrderStatus.COMPLETED, OrderStatus.CANCELLED]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Only failed, completed, or cancelled orders can be edited. Current status: {order.status.value}",
+            )
+
+        body = await request.json()
+        
+        # Prepare update data
+        updates = {}
+        
+        # Allow updating instructions
+        if "instructions" in body:
+            updates["instructions"] = body["instructions"]
+        
+        # Allow updating product info
+        if "product_name" in body:
+            updates["product_name"] = body["product_name"]
+        if "product_url" in body:
+            updates["product_url"] = body["product_url"]
+        if "product_size" in body:
+            updates["product_size"] = body["product_size"]
+        if "product_color" in body:
+            updates["product_color"] = body["product_color"]
+        
+        # Allow updating customer info
+        if "customer_name" in body:
+            updates["customer_name"] = body["customer_name"]
+        if "customer_email" in body:
+            updates["customer_email"] = body["customer_email"]
+        
+        # Allow updating shipping address
+        if "shipping_address" in body:
+            updates["shipping_address"] = body["shipping_address"]
+        
+        if not updates:
+            raise HTTPException(status_code=400, detail="No valid fields to update")
+        
+        logger.info(f"Editing order {order_id} with updates: {updates}")
+        
+        # Update order
+        db_manager.update_order(order_id, updates)
+        
+        # Get updated order
+        updated_order = db_manager.get_order(order_id)
+        
+        # Broadcast update
+        await broadcast_update(
+            {"type": "order_updated", "order": updated_order.to_dict()}
+        )
+        
+        logger.info(f"Order {order_id} successfully updated")
+        
+        return {
+            "success": True,
+            "message": "Order has been updated successfully",
+            "order_id": order_id,
+            "order": updated_order.to_dict()
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to edit order {order_id}: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1360,35 +1428,106 @@ async def get_session_replay_status(order_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/orders/{order_id}/retry")
-async def retry_order(order_id: str, background_tasks: BackgroundTasks):
-    """Retry a failed order"""
+@app.get("/api/orders/{order_id}/nova-act-report")
+async def get_nova_act_report(order_id: str):
+    """Get Nova Act HTML report from S3"""
     try:
+        import boto3
+        from botocore.exceptions import ClientError
+        
         order = db_manager.get_order(order_id)
         if not order:
             raise HTTPException(status_code=404, detail="Order not found")
-
-        if order.status not in [OrderStatus.FAILED, OrderStatus.CANCELLED]:
+        
+        # Get S3 configuration
+        settings_service = SettingsService(db_manager)
+        agent_config = settings_service.get_automation_config("nova_act")
+        
+        s3_bucket = agent_config.get("session_replay_s3_bucket")
+        if not s3_bucket:
             raise HTTPException(
-                status_code=400, detail="Only failed or cancelled orders can be retried"
+                status_code=404,
+                detail="Nova Act reports not configured. S3 bucket not set."
             )
-
-        # Reset order status to pending
-        db_manager.update_order_status(order_id, OrderStatus.PENDING)
-
-        # Add back to queue
-        background_tasks.add_task(order_queue.process_order, order_id)
-
-        # Broadcast update
-        await broadcast_update({"type": "order_retried", "order_id": order_id})
-
-        return {"message": "Order queued for retry", "order_id": order_id}
-
+        
+        s3_prefix = agent_config.get("session_replay_s3_prefix", "nova-act-sessions/")
+        s3_key_prefix = f"{s3_prefix}{order_id}/"
+        
+        # List files in S3 for this order
+        s3_client = boto3.client('s3')
+        try:
+            response = s3_client.list_objects_v2(
+                Bucket=s3_bucket,
+                Prefix=s3_key_prefix
+            )
+            
+            if 'Contents' not in response or len(response['Contents']) == 0:
+                raise HTTPException(
+                    status_code=404,
+                    detail="No Nova Act reports found for this order"
+                )
+            
+            # Find HTML files
+            html_files = [
+                obj for obj in response['Contents']
+                if obj['Key'].endswith('.html')
+            ]
+            
+            if not html_files:
+                raise HTTPException(
+                    status_code=404,
+                    detail="No HTML reports found for this order"
+                )
+            
+            # Generate presigned URLs for all HTML files
+            reports = []
+            for html_file in html_files:
+                presigned_url = s3_client.generate_presigned_url(
+                    'get_object',
+                    Params={
+                        'Bucket': s3_bucket,
+                        'Key': html_file['Key']
+                    },
+                    ExpiresIn=3600  # 1 hour
+                )
+                
+                reports.append({
+                    'filename': html_file['Key'].split('/')[-1],
+                    'size': html_file['Size'],
+                    'last_modified': html_file['LastModified'].isoformat(),
+                    'download_url': presigned_url,
+                    's3_key': html_file['Key']
+                })
+            
+            return {
+                'order_id': order_id,
+                's3_bucket': s3_bucket,
+                's3_prefix': s3_key_prefix,
+                'reports': reports
+            }
+            
+        except ClientError as e:
+            if e.response['Error']['Code'] == 'NoSuchBucket':
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"S3 bucket '{s3_bucket}' not found"
+                )
+            elif e.response['Error']['Code'] == 'AccessDenied':
+                raise HTTPException(
+                    status_code=403,
+                    detail="Access denied to S3 bucket. Check IAM permissions."
+                )
+            else:
+                raise
+        
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to retry order {order_id}: {e}")
+        logger.error(f"Failed to get Nova Act report for order {order_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# Duplicate retry endpoint removed - using the one defined earlier
 
 
 @app.delete("/api/orders/{order_id}")
@@ -1608,41 +1747,12 @@ async def get_queue_metrics():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/queue/pause")
-async def pause_queue():
-    """Pause the order queue"""
-    try:
-        await order_queue.pause()
-        return {"message": "Queue paused successfully"}
-
-    except Exception as e:
-        logger.error(f"Failed to pause queue: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/queue/resume")
-async def resume_queue():
-    """Resume the order queue"""
-    try:
-        await order_queue.resume()
-        return {"message": "Queue resumed successfully"}
-
-    except Exception as e:
-        logger.error(f"Failed to resume queue: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @app.get("/api/queue/status")
 async def get_queue_status():
     """Get current queue status"""
     try:
-        status = "active"  # Default status
-        if hasattr(order_queue, "is_paused") and order_queue.is_paused:
-            status = "paused"
-        elif hasattr(order_queue, "paused") and order_queue.paused:
-            status = "paused"
-
-        return {"status": status}
+        # Queue is always active (pause/resume removed for simplicity)
+        return {"status": "active"}
 
     except Exception as e:
         logger.error(f"Failed to get queue status: {e}")
@@ -2068,18 +2178,52 @@ async def compare_automation_methods():
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
+    logger.info("WebSocket client connected")
     try:
-        while True:
-            # Keep connection alive
-            data = await websocket.receive_text()
-            # Echo back for heartbeat
-            await websocket.send_text(
-                json.dumps(
-                    {"type": "heartbeat", "timestamp": datetime.now().isoformat()}
-                )
+        # Send initial connection confirmation
+        await websocket.send_text(
+            json.dumps(
+                {"type": "connected", "timestamp": datetime.now(timezone.utc).isoformat()}
             )
+        )
+        
+        while True:
+            try:
+                # Wait for messages with timeout to allow periodic heartbeats
+                data = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
+                
+                # Handle ping/pong or other client messages
+                try:
+                    message = json.loads(data)
+                    if message.get("type") == "ping":
+                        await websocket.send_text(
+                            json.dumps(
+                                {"type": "pong", "timestamp": datetime.now(timezone.utc).isoformat()}
+                            )
+                        )
+                except json.JSONDecodeError:
+                    # Ignore invalid JSON
+                    pass
+                    
+            except asyncio.TimeoutError:
+                # Send heartbeat if no message received
+                try:
+                    await websocket.send_text(
+                        json.dumps(
+                            {"type": "heartbeat", "timestamp": datetime.now(timezone.utc).isoformat()}
+                        )
+                    )
+                except:
+                    # Connection lost
+                    break
+                    
     except WebSocketDisconnect:
+        logger.info("WebSocket client disconnected normally")
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}")
+    finally:
         manager.disconnect(websocket)
+        logger.info("WebSocket connection closed")
 
 
 # Error handlers
@@ -2374,6 +2518,20 @@ async def upload_orders_csv(
                 # Handle other affiliate patterns
                 if ("jdoqocy.com" in url_lower or "dpbolvw.net" in url_lower) and "mytheresa.com" in url_lower:
                     retailer = "mytheresa"
+                
+                # Match extracted retailer name with configured retailers (case-insensitive)
+                all_retailer_urls = db_manager.get_retailer_urls()
+                configured_retailers = {url['retailer'].lower(): url['retailer'] for url in all_retailer_urls}
+                
+                # Find matching configured retailer
+                if retailer.lower() in configured_retailers:
+                    retailer = configured_retailers[retailer.lower()]
+                else:
+                    # Try to find partial match
+                    for config_lower, config_actual in configured_retailers.items():
+                        if retailer.lower() in config_lower or config_lower in retailer.lower():
+                            retailer = config_actual
+                            break
 
                 # Create order with provided settings
                 order_id = await order_queue.add_order(
@@ -2382,27 +2540,24 @@ async def upload_orders_csv(
                     ai_model=ai_model,
                     product_name=full_product_name,
                     product_url=product_url,
-                    customer_name="CSV Import Customer",
-                    customer_email="csv-import@example.com",
+                    customer_name="Jane Doe",
+                    customer_email="jane.doe@example.com",
                     shipping_address={
-                        "first_name": "CSV",
-                        "last_name": "Import",
-                        "address_line_1": "123 Import Street",
-                        "city": "Import City",
+                        "first_name": "Jane",
+                        "last_name": "Doe",
+                        "address_line_1": "123 Main Street",
+                        "city": "San Francisco",
                         "state": "CA",
-                        "postal_code": "90210",
+                        "postal_code": "94102",
                         "country": "US",
+                        "phone": "4154351234",
                     },
                     product_size=size if size else None,
                     product_color=color if color else None,
                     product_price=price,
                     payment_token=f'tok_csv_import_{datetime.now().strftime("%Y%m%d_%H%M%S")}_{row_num}',
                     priority=OrderPriority.NORMAL,
-                    instructions=(
-                        f"Imported from CSV. Description: {description}"
-                        if description
-                        else "Imported from CSV"
-                    ),
+                    instructions=description if description else None,
                 )
 
                 created_orders.append(order_id)

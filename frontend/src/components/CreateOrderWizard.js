@@ -24,7 +24,7 @@ const CreateOrderWizard = ({ visible, onDismiss, onSubmit, addNotification }) =>
   const [formData, setFormData] = useState({
     retailer: '',
     automation_method: '',
-    ai_model: 'us.anthropic.claude-sonnet-4-20250514-v1:0', // Default to latest Claude
+    ai_model: 'global.anthropic.claude-sonnet-4-5-20250929-v1:0', // Default to latest Claude
     product: {
       url: '',
       name: '',
@@ -201,7 +201,7 @@ const CreateOrderWizard = ({ visible, onDismiss, onSubmit, addNotification }) =>
       setFormData({
         retailer: '',
         automation_method: '',
-        ai_model: 'us.anthropic.claude-sonnet-4-20250514-v1:0',
+        ai_model: 'global.anthropic.claude-sonnet-4-5-20250929-v1:0',
         product: { url: '', name: '', size: '', color: '', quantity: 1, price: null },
         customer_name: '',
         customer_email: '',
@@ -497,7 +497,7 @@ const CreateOrderWizard = ({ visible, onDismiss, onSubmit, addNotification }) =>
               <Input
                 value={formData.shipping_address.phone}
                 onChange={({ detail }) => updateFormData('shipping_address.phone', detail.value)}
-                placeholder="(555) 123-4567"
+                placeholder="4154351234"
               />
             </FormField>
           </SpaceBetween>

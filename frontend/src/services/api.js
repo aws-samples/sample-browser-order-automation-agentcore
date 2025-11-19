@@ -17,11 +17,11 @@ class APIService {
 
     try {
       const response = await fetch(url, config);
-      
+
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
-      
+
       return await response.json();
     } catch (error) {
       console.error(`API request failed: ${endpoint}`, error);
@@ -143,8 +143,18 @@ class WebSocketService {
   }
 
   connect() {
+    // Prevent multiple connections
+    if (this.ws && (this.ws.readyState === WebSocket.CONNECTING || this.ws.readyState === WebSocket.OPEN)) {
+      console.log('WebSocket already connected or connecting');
+      return;
+    }
+
     try {
-      const wsUrl = `ws://localhost:8000/ws`;
+      // Use environment variable or default to localhost:8000
+      const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+      const wsUrl = apiUrl.replace('http://', 'ws://').replace('https://', 'wss://') + '/ws';
+
+      console.log('Connecting to WebSocket:', wsUrl);
       this.ws = new WebSocket(wsUrl);
 
       this.ws.onopen = () => {
@@ -164,6 +174,7 @@ class WebSocketService {
 
       this.ws.onclose = () => {
         console.log('WebSocket disconnected');
+        this.ws = null;
         this.notifyListeners('connected', { connected: false });
         this.attemptReconnect();
       };
@@ -220,6 +231,10 @@ class WebSocketService {
       this.ws = null;
     }
     this.listeners.clear();
+  }
+
+  isConnected() {
+    return this.ws && this.ws.readyState === WebSocket.OPEN;
   }
 }
 

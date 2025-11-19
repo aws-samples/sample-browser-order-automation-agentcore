@@ -75,15 +75,122 @@ class BrowserService:
 
         logger.info("BrowserService initialized")
 
-    def create_browser_with_recording_real(self, session_id: str) -> tuple:
-        """Create a browser with recording configuration using Control Plane API."""
+    def get_or_create_reusable_browser(
+        self, 
+        session_id: str = None,
+        reuse: bool = True
+    ) -> tuple:
+        """Get or create a browser with Web Bot Auth enabled.
+        
+        Args:
+            session_id: Optional session ID for S3 prefix
+            reuse: If True, reuse existing browser. If False, create new one.
+            
+        Returns:
+            tuple: (browser_id, recording_config)
+        """
         try:
             if not boto3 or not get_control_plane_endpoint:
                 raise ImportError("Required AWS packages not available")
 
-            logger.info(f"Creating browser with recording for session {session_id}")
+            # Determine browser name
+            if reuse:
+                browser_name = "order_automation_browser_with_signing"
+                logger.info(f"Getting or creating reusable browser: {browser_name}")
+            else:
+                browser_name = f"browser_{uuid.uuid4().hex[:8]}"
+                logger.info(f"Creating new browser: {browser_name}")
+            
+            # Try to create browser
+            try:
+                return self._create_browser(browser_name, session_id)
+            except Exception as e:
+                error_str = str(e)
+                
+                # If browser already exists (ConflictException), try to find it
+                if "already exists" in error_str or "ConflictException" in error_str:
+                    logger.info(f"Browser {browser_name} already exists, searching for it...")
+                    
+                    region = self.config.get("agentcore_region", "us-west-2")
+                    control_plane_url = get_control_plane_endpoint(region)
+                    control_client = boto3.client(
+                        "bedrock-agentcore-control",
+                        region_name=region,
+                        endpoint_url=control_plane_url,
+                    )
+                    
+                    # Try list_browsers with type=CUSTOM and pagination
+                    try:
+                        all_browsers = []
+                        next_token = None
+                        
+                        # Paginate through all browsers
+                        while True:
+                            if next_token:
+                                list_response = control_client.list_browsers(
+                                    type='CUSTOM',
+                                    nextToken=next_token,
+                                    maxResults=50
+                                )
+                            else:
+                                list_response = control_client.list_browsers(
+                                    type='CUSTOM',
+                                    maxResults=50
+                                )
+                            
+                            browsers = list_response.get('browserSummaries', [])
+                            all_browsers.extend(browsers)
+                            
+                            next_token = list_response.get('nextToken')
+                            if not next_token:
+                                break
+                        
+                        logger.info(f"Found {len(all_browsers)} custom browsers (paginated)")
+                        
+                        for browser in all_browsers:
+                            if browser.get('name') == browser_name:
+                                browser_id = browser['browserId']
+                                response = control_client.get_browser(browserId=browser_id)
+                                recording_config = response.get("recording", {})
+                                logger.info(f"Found existing browser: {browser_id}")
+                                return browser_id, recording_config
+                    except Exception as list_error:
+                        logger.warning(f"list_browsers failed: {list_error}")
+                    
+                    # If list_browsers doesn't work, extract browser ID from error message
+                    # or use a known ID pattern
+                    logger.warning(f"Could not find browser {browser_name} via list_browsers")
+                    logger.warning(f"Browser exists but cannot be retrieved. Consider deleting and recreating.")
+                    
+                    # Return a placeholder - the browser exists but we can't get its details
+                    # This will cause the session to fail, prompting manual cleanup
+                    raise RuntimeError(
+                        f"Browser '{browser_name}' exists but cannot be retrieved. "
+                        f"Please delete it manually from AWS Console and try again."
+                    )
+                else:
+                    # Different error, re-raise
+                    raise
+            
+        except Exception as e:
+            logger.error(f"Failed to get or create browser: {e}")
+            raise
 
-            # Create control plane client
+    def _create_browser(
+        self, 
+        browser_name: str, 
+        session_id: str = None
+    ) -> tuple:
+        """Internal method to create a browser with Web Bot Auth.
+        
+        Args:
+            browser_name: Name for the browser
+            session_id: Optional session ID for S3 prefix
+            
+        Returns:
+            tuple: (browser_id, recording_config)
+        """
+        try:
             region = self.config.get("agentcore_region", "us-west-2")
             control_plane_url = get_control_plane_endpoint(region)
             control_client = boto3.client(
@@ -91,69 +198,47 @@ class BrowserService:
                 region_name=region,
                 endpoint_url=control_plane_url,
             )
-
-            # Create browser with recording
-            browser_name = f"order_automation_{session_id[:8]}"
-            s3_bucket = self.config.get("session_replay_s3_bucket", "sanghwa-oregon")
-            s3_prefix = self.config.get(
-                "session_replay_s3_prefix", f"session-replays/{session_id}/"
-            )
+            
+            s3_bucket = self.config.get("session_replay_s3_bucket", "")
+            s3_prefix = self.config.get("session_replay_s3_prefix", "session-replays/")
+            if session_id:
+                s3_prefix = f"{s3_prefix}{session_id}/"
+            
             execution_role_arn = self.config.get("execution_role_arn")
-
-            logger.info(f"Browser name: {browser_name}")
-            logger.info(f"S3 location: s3://{s3_bucket}/{s3_prefix}")
-
-            if execution_role_arn:
-                response = control_client.create_browser(
-                    name=browser_name,
-                    executionRoleArn=execution_role_arn,
-                    networkConfiguration={"networkMode": "PUBLIC"},
-                    recording={
-                        "enabled": True,
-                        "s3Location": {"bucket": s3_bucket, "prefix": s3_prefix},
-                    },
-                    browserConfiguration={
-                        "args": [
-                            "--enable-features=NetworkService,NetworkServiceLogging",
-                            "--disable-web-security",
-                            "--no-sandbox",
-                            "--disable-dev-shm-usage",
-                            "--enable-automation",
-                            "--ignore-certificate-errors",
-                            "--ignore-ssl-errors",
-                            "--ignore-certificate-errors-spki-list",
-                            "--disable-extensions",
-                        ]
-                    },
-                )
-            else:
-                response = control_client.create_browser(
-                    name=browser_name,
-                    networkConfiguration={"networkMode": "PUBLIC"},
-                    browserConfiguration={
-                        "args": [
-                            "--enable-features=NetworkService,NetworkServiceLogging",
-                            "--disable-web-security",
-                            "--no-sandbox",
-                            "--disable-dev-shm-usage",
-                            "--enable-automation",
-                            "--ignore-certificate-errors",
-                            "--ignore-ssl-errors",
-                            "--ignore-certificate-errors-spki-list",
-                            "--disable-extensions",
-                        ]
-                    },
-                )
-
+            browser_signing_enabled = self.config.get("browser_signing_enabled", True)
+            
+            # Build browser parameters
+            browser_params = {
+                "name": browser_name,
+                "networkConfiguration": {"networkMode": "PUBLIC"},
+            }
+            
+            # Add recording if execution role is available
+            if execution_role_arn and s3_bucket:
+                browser_params["executionRoleArn"] = execution_role_arn
+                browser_params["recording"] = {
+                    "enabled": True,
+                    "s3Location": {"bucket": s3_bucket, "prefix": s3_prefix},
+                }
+            
+            # Note: browserConfiguration is not yet supported in current boto3 version
+            # HTTP/2 support will be enabled by default in AgentCore browsers
+            
+            # Add Web Bot Auth
+            if browser_signing_enabled:
+                browser_params["browserSigning"] = {"enabled": True}
+                logger.info(f"Web Bot Auth enabled for browser {browser_name}")
+            
+            response = control_client.create_browser(**browser_params)
             browser_id = response["browserId"]
             recording_config = response.get("recording", {})
-
-            logger.info(f"Browser created: {browser_id}")
+            
+            logger.info(f"Created browser: {browser_id} (Web Bot Auth: {browser_signing_enabled})")
             return browser_id, recording_config
-
+            
         except Exception as e:
-            logger.error(f"Failed to create browser with recording: {e}")
-            raise e
+            logger.error(f"Failed to create browser {browser_name}: {e}")
+            raise
 
     async def initialize_browser_session_async(
         self, session_id: str, browser_id: str
@@ -225,94 +310,11 @@ class BrowserService:
     def create_browser_with_recording(
         self, session_id: str
     ) -> tuple[str, Dict[str, Any]]:
-        """Create a browser with recording configuration using Control Plane API."""
-        logger.info(
-            f"Creating browser with recording configuration for session: {session_id}"
-        )
-
-        try:
-            # Create control plane client
-            region = self.config.get("agentcore_region", "us-west-2")
-            control_plane_url = get_control_plane_endpoint(region)
-            control_client = boto3.client(
-                "bedrock-agentcore-control",
-                region_name=region,
-                endpoint_url=control_plane_url,
-            )
-
-            # Create browser with recording
-            browser_name = f"browser_{uuid.uuid4().hex[:8]}"
-            s3_bucket = self.config.get("session_replay_s3_bucket", "sanghwa-oregon")
-            s3_prefix = self.config.get(
-                "session_replay_s3_prefix", f"session-replays/{session_id}/"
-            )
-            execution_role_arn = self.config.get("execution_role_arn")
-
-            logger.info(f"Browser name: {browser_name}")
-            logger.info(f"S3 location: s3://{s3_bucket}/{s3_prefix}")
-
-            if execution_role_arn:
-                # Create browser with recording if role is available
-                response = control_client.create_browser(
-                    name=browser_name,
-                    executionRoleArn=execution_role_arn,
-                    networkConfiguration={"networkMode": "PUBLIC"},
-                    recording={
-                        "enabled": True,
-                        "s3Location": {"bucket": s3_bucket, "prefix": s3_prefix},
-                    },
-                    # Add browser configuration for HTTP/2 support
-                    browserConfiguration={
-                        "args": [
-                            "--enable-features=NetworkService,NetworkServiceLogging",
-                            "--disable-web-security",
-                            "--no-sandbox",
-                            "--disable-dev-shm-usage",
-                            "--enable-automation",
-                            "--ignore-certificate-errors",
-                            "--ignore-ssl-errors",
-                            "--ignore-certificate-errors-spki-list",
-                            "--disable-extensions",
-                        ]
-                    },
-                )
-                logger.info(f"Created browser with recording: {browser_name}")
-            else:
-                # Create browser without recording if no role is configured
-                logger.warning(
-                    "No execution role ARN configured, creating browser without recording"
-                )
-                response = control_client.create_browser(
-                    name=browser_name,
-                    networkConfiguration={"networkMode": "PUBLIC"},
-                    # Add browser configuration for HTTP/2 support
-                    browserConfiguration={
-                        "args": [
-                            "--enable-features=NetworkService,NetworkServiceLogging",
-                            "--disable-web-security",
-                            "--no-sandbox",
-                            "--disable-dev-shm-usage",
-                            "--enable-automation",
-                            "--ignore-certificate-errors",
-                            "--ignore-ssl-errors",
-                            "--ignore-certificate-errors-spki-list",
-                            "--disable-extensions",
-                        ]
-                    },
-                )
-                logger.info(f"Created browser without recording: {browser_name}")
-
-            browser_id = response["browserId"]
-            recording_config = response.get("recording", {})
-
-            logger.info(f"Browser created: {browser_id}")
-            logger.info(f"Recording to: s3://{s3_bucket}/{s3_prefix}")
-
-            return browser_id, recording_config
-
-        except Exception as e:
-            logger.error(f"Failed to create browser with recording: {e}")
-            raise
+        """Create a browser with recording configuration.
+        
+        Deprecated: Use get_or_create_reusable_browser() instead for better performance.
+        """
+        return self.get_or_create_reusable_browser(session_id=session_id, reuse=False)
 
     def create_browser_session(
         self, session_id: str, order_id: str = None
@@ -329,8 +331,8 @@ class BrowserService:
                 try:
                     if AgentCoreBrowserClient and boto3:
                         # Create browser with recording
-                        browser_id, recording_config = (
-                            self.create_browser_with_recording_real(session_id)
+                        browser_id, recording_config = self.get_or_create_reusable_browser(
+                            session_id=session_id, reuse=False
                         )
 
                         # Create browser client

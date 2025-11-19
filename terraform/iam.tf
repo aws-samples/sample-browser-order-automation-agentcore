@@ -113,7 +113,9 @@ resource "aws_iam_role_policy" "ecs_task" {
           aws_s3_bucket.static_assets.arn,
           "${aws_s3_bucket.static_assets.arn}/*",
           "arn:aws:s3:::bedrock-agentcore-*",
-          "arn:aws:s3:::bedrock-agentcore-*/*"
+          "arn:aws:s3:::bedrock-agentcore-*/*",
+          "arn:aws:s3:::*",
+          "arn:aws:s3:::*/*"
         ]
       },
       {
@@ -267,6 +269,17 @@ resource "aws_iam_role_policy" "ecs_task" {
             "kms:ViaService" = "secretsmanager.${var.aws_region}.amazonaws.com"
           }
         }
+      },
+      {
+        Sid = "ECSExecSSMAccess"
+        Effect = "Allow"
+        Action = [
+          "ssmmessages:CreateControlChannel",
+          "ssmmessages:CreateDataChannel",
+          "ssmmessages:OpenControlChannel",
+          "ssmmessages:OpenDataChannel"
+        ]
+        Resource = "*"
       }
     ]
   })

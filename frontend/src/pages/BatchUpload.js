@@ -602,7 +602,7 @@ const BatchUpload = ({ addNotification }) => {
                 setUserSelectedModel(false); // Reset user selection tracking
               } else if (detail.selectedOption.value === 'strands' && !userSelectedModel) {
                 // Only set default if user hasn't manually selected a model
-                setAiModel('us.anthropic.claude-sonnet-4-20250514-v1:0');
+                setAiModel('global.anthropic.claude-sonnet-4-5-20250929-v1:0');
               }
             }}
             options={automationMethods}

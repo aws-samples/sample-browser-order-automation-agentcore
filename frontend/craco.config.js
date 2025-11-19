@@ -28,16 +28,21 @@ module.exports = {
         },
       },
       client: {
+        // Disable webpack-dev-server WebSocket to avoid conflicts
+        webSocketTransport: 'ws',
         webSocketURL: {
-          hostname: sockHost,
-          pathname: sockPath,
-          port: sockPort,
+          hostname: sockHost || 'localhost',
+          pathname: '/webpack-hmr', // Use completely different path
+          port: sockPort || 3000,
         },
         overlay: {
           errors: true,
           warnings: false,
         },
       },
+      // Disable hot module replacement WebSocket
+      hot: false,
+      liveReload: true, // Use live reload instead (full page refresh)
       devMiddleware: {
         publicPath: paths.publicUrlOrPath.slice(0, -1),
       },

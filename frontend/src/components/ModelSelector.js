@@ -7,6 +7,10 @@ import {
 const ModelSelector = ({ selectedModel, onChange, label = "AI Model", description, disabled = false }) => {
   const models = [
     {
+      id: 'global.anthropic.claude-sonnet-4-5-20250929-v1:0',
+      name: 'Claude Sonnet 4.5 (Global)'
+    },
+    {
       id: 'us.anthropic.claude-sonnet-4-20250514-v1:0',
       name: 'Claude Sonnet 4'
     },

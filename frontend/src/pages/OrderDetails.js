@@ -22,6 +22,31 @@ import SessionReplayViewer from '../components/SessionReplayViewer';
 
 // ResizeObserver errors are handled globally by errorSuppression utility
 
+// Expandable message component for execution logs
+const ExpandableMessage = ({ message }) => {
+  const [expanded, setExpanded] = useState(false);
+  const maxLength = 100;
+  const isTruncated = message && message.length > maxLength;
+  
+  if (!message) return 'N/A';
+  if (!isTruncated) return message;
+  
+  return (
+    <Box>
+      <Box>
+        {expanded ? message : `${message.substring(0, maxLength)}...`}
+      </Box>
+      <Button
+        variant="inline-link"
+        onClick={() => setExpanded(!expanded)}
+        iconName={expanded ? 'angle-up' : 'angle-down'}
+      >
+        {expanded ? 'Show less' : 'Show more'}
+      </Button>
+    </Box>
+  );
+};
+
 const OrderDetails = ({ addNotification }) => {
   const { orderId } = useParams();
   const navigate = useNavigate();
@@ -37,8 +62,25 @@ const OrderDetails = ({ addNotification }) => {
   const [manualControlEnabled, setManualControlEnabled] = useState(false);
   const [controlLoading, setControlLoading] = useState(false);
   const [novaActUpdates, setNovaActUpdates] = useState([]);
+  const [liveViewAvailable, setLiveViewAvailable] = useState(false);
+  const [sessionTimeoutRemaining, setSessionTimeoutRemaining] = useState(null);
   const intervalRef = useRef(null);
   const logsContainerRef = useRef(null);
+
+  // Separate function to check live view availability
+  const checkLiveViewAvailability = useCallback(async () => {
+    try {
+      const liveViewResponse = await fetch(`/api/orders/${orderId}/live-view`);
+      if (liveViewResponse.ok) {
+        const liveViewData = await liveViewResponse.json();
+        setLiveViewAvailable(liveViewData.live_view_available || false);
+        setSessionTimeoutRemaining(liveViewData.session_timeout_remaining || null);
+      }
+    } catch (liveViewError) {
+      console.warn('Failed to check live view availability:', liveViewError);
+      setLiveViewAvailable(false);
+    }
+  }, [orderId]);
 
   const fetchOrder = useCallback(async () => {
     try {
@@ -85,8 +127,9 @@ const OrderDetails = ({ addNotification }) => {
     }
     intervalRef.current = setInterval(() => {
       fetchOrder();
+      checkLiveViewAvailability(); // Also check live view availability
     }, 30000); // 30초마다 (reduced since we have WebSocket updates)
-  }, [fetchOrder]);
+  }, [fetchOrder, checkLiveViewAvailability]);
 
   // Stop polling function
   const stopPolling = useCallback(() => {
@@ -137,6 +180,11 @@ const OrderDetails = ({ addNotification }) => {
       unsubscribeOrderUpdate();
     };
   }, [fetchOrder, stopPolling, orderId]);
+  
+  // Separate useEffect for live view check (only on mount and when order status changes)
+  useEffect(() => {
+    checkLiveViewAvailability();
+  }, [checkLiveViewAvailability, order?.status]);
 
   // Handle polling based on order status
   useEffect(() => {
@@ -247,41 +295,7 @@ const OrderDetails = ({ addNotification }) => {
     }
   };
 
-  const handleResumeNovaAct = async () => {
-    setControlLoading(true);
-    try {
-      const response = await fetch(`/api/orders/${orderId}/resume-nova-act`, { method: 'POST' });
 
-      if (!response.ok) {
-        throw new Error('Failed to resume Nova Act');
-      }
-
-      const result = await response.json();
-      if (result.success) {
-        addNotification({
-          type: 'success',
-          header: 'Nova Act Resumed',
-          content: 'Nova Act automation has been resumed successfully'
-        });
-        fetchOrder(); // Refresh order data
-      } else {
-        addNotification({
-          type: 'warning',
-          header: 'Nova Act Resume Result',
-          content: result.message || 'Nova Act resumed but may require further attention'
-        });
-        fetchOrder(); // Refresh order data
-      }
-    } catch (error) {
-      addNotification({
-        type: 'error',
-        header: 'Failed to resume Nova Act',
-        content: error.message
-      });
-    } finally {
-      setControlLoading(false);
-    }
-  };
 
   const formatTime = (dateString) => {
     if (!dateString) return 'N/A';
@@ -297,9 +311,10 @@ const OrderDetails = ({ addNotification }) => {
     });
   };
 
-  const calculateDuration = (createdAt, completedAt) => {
-    if (!createdAt || !completedAt) return 'N/A';
-    const startTime = new Date(createdAt);
+  const calculateDuration = (startedAt, completedAt) => {
+    // Use started_at instead of created_at for accurate processing time
+    if (!startedAt || !completedAt) return 'N/A';
+    const startTime = new Date(startedAt);
     const endTime = new Date(completedAt);
     const durationMs = endTime - startTime;
 
@@ -375,9 +390,10 @@ const OrderDetails = ({ addNotification }) => {
                   label: 'AI Model',
                   value: order?.ai_model ? (
                     <span title={order.ai_model}>
-                      {order.ai_model.includes('claude-sonnet-4') ? 'Claude Sonnet 4' :
-                        order.ai_model.includes('claude-3-5-sonnet') ? 'Claude 3.5 Sonnet' :
-                          order.ai_model.includes('claude-sonnet') ? 'Claude 3.5 Sonnet' :
+                      {order.ai_model.includes('claude-sonnet-4-5') ? 'Claude Sonnet 4.5 (Global)' :
+                        order.ai_model.includes('claude-sonnet-4') ? 'Claude Sonnet 4' :
+                          order.ai_model.includes('claude-3-5-sonnet') ? 'Claude 3.5 Sonnet' :
+                            order.ai_model.includes('claude-sonnet') ? 'Claude 3.5 Sonnet' :
                             order.ai_model.includes('claude-haiku') ? 'Claude 3.5 Haiku' :
                               order.ai_model.includes('claude-opus') ? 'Claude 3 Opus' :
                                 order.ai_model.includes('gpt-4') ? 'GPT-4' :
@@ -404,11 +420,18 @@ const OrderDetails = ({ addNotification }) => {
                 { label: 'Created', value: formatTime(order.created_at) },
                 { label: 'Updated', value: formatTime(order.updated_at) },
                 { label: 'Completed', value: formatTime(order.completed_at) },
-                { label: 'Duration', value: calculateDuration(order.created_at, order.completed_at) }
+                { label: 'Processing Duration', value: calculateDuration(order.started_at, order.completed_at) }
               ]}
             />
           </ColumnLayout>
         </Container>
+
+        {/* Special Instructions */}
+        {order.instructions && order.instructions !== '-' && order.instructions.trim() !== '' && (
+          <Container header={<Header variant="h3">Special Instructions</Header>}>
+            <Box variant="p">{order.instructions}</Box>
+          </Container>
+        )}
 
         {/* Execution Logs - CloudWatch Style */}
         <Container
@@ -566,7 +589,8 @@ const OrderDetails = ({ addNotification }) => {
                   columns={1}
                   items={[
                     { label: 'Customer Name', value: order.customer_name },
-                    { label: 'Email', value: order.customer_email || 'N/A' }
+                    { label: 'Email', value: order.customer_email || 'N/A' },
+                    { label: 'Phone', value: order.shipping_address?.phone || '4154351234' }
                   ]}
                 />
               )}
@@ -587,6 +611,25 @@ const OrderDetails = ({ addNotification }) => {
             </ColumnLayout>
           </Container>
         )}
+        
+        {/* Payment Information */}
+        <Container header={<Header variant="h3">Payment Information</Header>}>
+          <KeyValuePairs
+            columns={2}
+            items={[
+              { label: 'Card Number', value: '4111 1111 1111 1111 (Test Card)' },
+              { label: 'Expiry Date', value: '12/25' },
+              { label: 'CVV', value: '123' },
+              { label: 'Cardholder Name', value: order.customer_name || 'Demo Customer' }
+            ]}
+          />
+          <Box variant="p" color="text-status-info" margin={{ top: 's' }}>
+            <Box variant="small">
+              This is test payment information used for automation purposes only. 
+              Real payment processing would be handled separately in production.
+            </Box>
+          </Box>
+        </Container>
       </SpaceBetween>
     );
   };
@@ -619,7 +662,7 @@ const OrderDetails = ({ addNotification }) => {
           {
             id: 'message',
             header: 'Message',
-            cell: item => item.message
+            cell: item => <ExpandableMessage message={item.message} />
           },
           {
             id: 'step',
@@ -652,13 +695,6 @@ const OrderDetails = ({ addNotification }) => {
                 )}
                 */}
                 {/* END TEMPORARILY DISABLED - Screenshots Button */}
-
-                <Button
-                  iconName="play"
-                  onClick={() => setShowSessionReplay(true)}
-                >
-                  Session Replay
-                </Button>
               </SpaceBetween>
             }
           >
@@ -774,6 +810,59 @@ const OrderDetails = ({ addNotification }) => {
         variant="h1"
         actions={
           <SpaceBetween direction="horizontal" size="xs">
+            {/* Session Replay Button */}
+            <Button
+              iconName="play"
+              onClick={() => setShowSessionReplay(true)}
+            >
+              Session Replay
+            </Button>
+            
+            {/* Nova Act Report Button */}
+            {order?.automation_method === 'nova_act' && (
+              <Button
+                iconName="download"
+                onClick={async () => {
+                  try {
+                    const response = await fetch(`/api/orders/${orderId}/nova-act-report`);
+                    if (response.ok) {
+                      const data = await response.json();
+                      if (data.reports && data.reports.length > 0) {
+                        const report = data.reports[0];
+                        window.open(report.download_url, '_blank');
+                        addNotification({
+                          type: 'success',
+                          header: 'Nova Act Report',
+                          content: `Downloading ${report.filename}`
+                        });
+                      } else {
+                        addNotification({
+                          type: 'info',
+                          header: 'No Reports Available',
+                          content: 'Nova Act report not yet available'
+                        });
+                      }
+                    } else {
+                      const error = await response.json();
+                      addNotification({
+                        type: 'warning',
+                        header: 'Report Not Available',
+                        content: error.detail || 'Nova Act report not found'
+                      });
+                    }
+                  } catch (error) {
+                    addNotification({
+                      type: 'error',
+                      header: 'Download Failed',
+                      content: `Failed to download Nova Act report: ${error.message}`
+                    });
+                  }
+                }}
+              >
+                Nova Act Report
+              </Button>
+            )}
+            
             <Button
               iconName="refresh"
               onClick={fetchOrder}
@@ -781,6 +870,53 @@ const OrderDetails = ({ addNotification }) => {
             >
               Refresh
             </Button>
+            {(order?.status === 'failed' || order?.status === 'completed' || order?.status === 'cancelled') && (
+              <Button
+                variant="normal"
+                iconName="edit"
+                onClick={() => navigate(`/orders/${orderId}/edit`)}
+              >
+                Edit
+              </Button>
+            )}
+            {order?.status === 'failed' && (
+              <Button
+                variant="primary"
+                iconName="redo"
+                onClick={async () => {
+                  try {
+                    const response = await fetch(`/api/orders/${orderId}/retry`, {
+                      method: 'POST'
+                    });
+                    
+                    if (!response.ok) {
+                      const errorData = await response.json().catch(() => ({}));
+                      throw new Error(errorData.detail || errorData.message || 'Failed to retry order');
+                    }
+                    
+                    const result = await response.json();
+                    
+                    addNotification({
+                      type: 'success',
+                      header: 'Order Retry Initiated',
+                      content: result.message || 'The order has been added back to the queue for processing'
+                    });
+                    
+                    // Refresh order data
+                    fetchOrder();
+                  } catch (error) {
+                    console.error('Retry error:', error);
+                    addNotification({
+                      type: 'error',
+                      header: 'Retry Failed',
+                      content: error.message || 'An unexpected error occurred'
+                    });
+                  }
+                }}
+              >
+                Retry Order
+              </Button>
+            )}
             {order?.status === 'processing' && order?.automation_method === 'strands' && (
               <>
                 {!manualControlEnabled ? (
@@ -804,16 +940,7 @@ const OrderDetails = ({ addNotification }) => {
                 )}
               </>
             )}
-            {order?.status === 'requires_human' && order?.automation_method === 'nova_act' && (
-              <Button
-                variant="primary"
-                iconName="play"
-                onClick={handleResumeNovaAct}
-                loading={controlLoading}
-              >
-                Resume Nova Act
-              </Button>
-            )}
+
             {order?.status === 'pending' && (
               <Button
                 variant="normal"
@@ -881,9 +1008,13 @@ const OrderDetails = ({ addNotification }) => {
             },
             */
             /* END TEMPORARILY DISABLED - Screenshots Tab */
-            ...(['processing', 'requires_human'].includes(order?.status) ? [{
+            ...(liveViewAvailable ? [{
               id: 'live-view',
-              label: 'Live Browser View'
+              label: 'Live Browser View' + (
+                sessionTimeoutRemaining && !['processing', 'requires_human'].includes(order?.status)
+                  ? ` (${Math.floor(sessionTimeoutRemaining / 60)}m remaining)`
+                  : ''
+              )
             }] : []),
 
             /* TEMPORARILY DISABLED - Raw Data Tab - Will be re-enabled later */

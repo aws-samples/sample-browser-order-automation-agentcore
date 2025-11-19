@@ -216,6 +216,14 @@ class OrderQueue:
             logger.info(
                 f"Started processing order {order.id} for {order.retailer} using {order.automation_method.value}"
             )
+            
+            # Update started_at timestamp (important for retry scenarios)
+            from datetime import datetime, timezone
+            self.db_manager.update_order_status(
+                order.id,
+                "processing",
+                started_at=datetime.now(timezone.utc)
+            )
 
             # Basic validation: retailer URLs already validated during order creation
             logger.info(
@@ -423,30 +431,29 @@ class OrderQueue:
                 )
                 logger.error(f"Order {order.id} failed: {result.get('error')}")
 
-                # Clean up agent resources for failed orders with timeout
-                try:
-                    await asyncio.wait_for(agent.cleanup(force=True), timeout=10.0)
-                except asyncio.TimeoutError:
-                    logger.warning(f"Agent cleanup timed out for failed order {order.id}")
-                except Exception as cleanup_error:
-                    logger.error(f"Agent cleanup failed for order {order.id}: {cleanup_error}")
-                finally:
-                    # Always remove from active agents
-                    if order.id in self.active_agents:
-                        del self.active_agents[order.id]
-
-            # Clean up agent resources only for completed orders
-            if result.get("success"):
-                try:
-                    await asyncio.wait_for(agent.cleanup(), timeout=10.0)
-                except asyncio.TimeoutError:
-                    logger.warning(f"Agent cleanup timed out for successful order {order.id}")
-                except Exception as cleanup_error:
-                    logger.error(f"Agent cleanup failed for order {order.id}: {cleanup_error}")
-                finally:
-                    # Always remove from active agents
-                    if order.id in self.active_agents:
-                        del self.active_agents[order.id]
+            # Clean up agent resources for both successful and failed orders
+            # Note: cleanup() includes grace period (browser_session_timeout - elapsed_time)
+            # This allows human inspection via Live Browser View even after failure
+            try:
+                # Get browser session timeout from config for cleanup timeout
+                from config import get_config_manager
+                config_manager = get_config_manager(self.db_manager)
+                agent_config = config_manager.get_agent_config(order.automation_method.value)
+                cleanup_timeout = agent_config.browser_session_timeout + 60  # Add 60s buffer
+                
+                status = "successful" if result.get("success") else "failed"
+                logger.info(f"Starting cleanup for {status} order {order.id} with timeout {cleanup_timeout}s (includes grace period for human inspection)")
+                
+                # Use grace period for both success and failure (no force=True)
+                await asyncio.wait_for(agent.cleanup(), timeout=float(cleanup_timeout))
+            except asyncio.TimeoutError:
+                logger.warning(f"Agent cleanup timed out for order {order.id}")
+            except Exception as cleanup_error:
+                logger.error(f"Agent cleanup failed for order {order.id}: {cleanup_error}")
+            finally:
+                # Always remove from active agents
+                if order.id in self.active_agents:
+                    del self.active_agents[order.id]
 
         except Exception as e:
             import traceback
@@ -553,6 +560,26 @@ class OrderQueue:
 
         except Exception as e:
             logger.error(f"Failed to add order to queue: {e}")
+            raise
+
+    async def add_existing_order(self, order_id: str) -> bool:
+        """Add an existing order back to the queue (for retry)"""
+        try:
+            order = self.db_manager.get_order(order_id)
+            if not order:
+                raise ValueError(f"Order {order_id} not found")
+
+            # Verify order is in pending status
+            if order.status != OrderStatus.PENDING:
+                raise ValueError(
+                    f"Order must be in pending status to be added to queue. Current status: {order.status.value}"
+                )
+
+            logger.info(f"Added existing order {order_id} back to queue for retry")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to add existing order {order_id} to queue: {e}")
             raise
 
     async def cancel_order(self, order_id: str) -> bool:

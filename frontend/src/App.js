@@ -75,53 +75,118 @@ function AppContent() {
   useEffect(() => {
     let ws = null;
     let reconnectTimeout = null;
+    let isManualClose = false;
+    let heartbeatInterval = null;
 
     const connectWebSocket = () => {
       try {
-        ws = new WebSocket('ws://localhost:8000/ws');
+        // Use proxy in development (package.json proxy setting)
+        // In production, use the same origin
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsHost = process.env.NODE_ENV === 'development' 
+          ? 'localhost:8000'  // Direct connection to backend in development
+          : window.location.host;
+        
+        const wsUrl = `${wsProtocol}//${wsHost}/ws`;
+        console.log('[WebSocket] Connecting to:', wsUrl);
+        ws = new WebSocket(wsUrl);
 
         ws.onopen = () => {
+          console.log('[WebSocket] Connected successfully');
           setConnectionStatus('connected');
+          
+          // Start sending periodic pings to keep connection alive
+          heartbeatInterval = setInterval(() => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+              console.log('[WebSocket] Sending ping');
+              ws.send(JSON.stringify({ type: 'ping' }));
+            }
+          }, 25000); // Send ping every 25 seconds
         };
 
         ws.onmessage = (event) => {
-          const data = JSON.parse(event.data);
-          if (data.type === 'order_progress') {
-            // Handle real-time updates
-            console.log('Real-time update:', data);
+          try {
+            const data = JSON.parse(event.data);
+            console.log('[WebSocket] Received:', data.type);
+            
+            // Handle different message types
+            switch (data.type) {
+              case 'connected':
+                console.log('[WebSocket] Connection confirmed by server');
+                break;
+              case 'heartbeat':
+                console.log('[WebSocket] Heartbeat received, responding with ping');
+                // Respond to heartbeat with ping
+                if (ws.readyState === WebSocket.OPEN) {
+                  ws.send(JSON.stringify({ type: 'ping' }));
+                }
+                break;
+              case 'pong':
+                console.log('[WebSocket] Pong received');
+                break;
+              case 'order_progress':
+              case 'order_created':
+              case 'order_updated':
+                // Handle real-time updates
+                console.log('[WebSocket] Real-time update:', data);
+                break;
+              default:
+                console.log('[WebSocket] Unknown message type:', data.type);
+            }
+          } catch (error) {
+            console.error('[WebSocket] Error parsing message:', error);
           }
         };
 
-        ws.onclose = () => {
+        ws.onclose = (event) => {
+          console.log('[WebSocket] Disconnected. Code:', event.code, 'Reason:', event.reason, 'Clean:', event.wasClean);
           setConnectionStatus('disconnected');
+          
+          // Clear heartbeat interval
+          if (heartbeatInterval) {
+            clearInterval(heartbeatInterval);
+            heartbeatInterval = null;
+          }
+          
           // Only reconnect if not manually closed
-          if (ws && ws.readyState !== WebSocket.CLOSED) {
+          if (!isManualClose) {
+            console.log('[WebSocket] Will reconnect in 3 seconds...');
             reconnectTimeout = setTimeout(connectWebSocket, 3000);
           }
         };
 
-        ws.onerror = () => {
+        ws.onerror = (error) => {
+          console.error('[WebSocket] Error:', error);
           setConnectionStatus('error');
         };
 
       } catch (error) {
         setConnectionStatus('error');
-        console.error('WebSocket connection failed:', error);
+        console.error('[WebSocket] Connection failed:', error);
       }
     };
 
+    console.log('[WebSocket] Initializing connection...');
     connectWebSocket();
 
     // Cleanup function
     return () => {
+      console.log('[WebSocket] Cleanup: closing connection');
+      isManualClose = true;
+      
+      if (heartbeatInterval) {
+        clearInterval(heartbeatInterval);
+      }
+      
       if (reconnectTimeout) {
         clearTimeout(reconnectTimeout);
       }
-      if (ws) {
-        ws.close();
+      
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.close(1000, 'Component unmounting');
       }
     };
-  }, [addNotification]);
+  }, []); // Remove addNotification dependency to prevent reconnections
 
   const navigationItems = [
     {
@@ -393,6 +458,7 @@ function AppContent() {
         <Route path="/" element={<OrderDashboard addNotification={addNotification} />} />
         <Route path="/dashboard" element={<OrderDashboard addNotification={addNotification} />} />
         <Route path="/orders/create" element={<CreateOrder addNotification={addNotification} />} />
+        <Route path="/orders/:orderId/edit" element={<CreateOrder addNotification={addNotification} />} />
         <Route path="/orders/batch-upload" element={<BatchUpload addNotification={addNotification} />} />
         <Route path="/orders/:orderId" element={<OrderDetails addNotification={addNotification} />} />
 

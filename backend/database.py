@@ -121,6 +121,9 @@ class OrderModel(Base):
     session_replay_s3_bucket = Column(String(200))
     session_replay_s3_prefix = Column(String(500))
     session_replay_enabled = Column(Boolean, default=False)
+    
+    # Special instructions
+    instructions = Column(Text)
 
 
 class SessionModel(Base):
@@ -255,6 +258,7 @@ class Order:
     session_replay_s3_bucket: Optional[str] = None
     session_replay_s3_prefix: Optional[str] = None
     session_replay_enabled: bool = False
+    instructions: Optional[str] = None
 
     def to_dict(self):
         data = asdict(self)
@@ -496,6 +500,32 @@ class DatabaseManager:
                 except Exception as e:
                     logger.warning(f"Failed to initialize default retailer URLs: {e}")
 
+                # Migration 4: Add instructions column
+                if not self.use_postgres:
+                    # SQLite migration
+                    try:
+                        session.execute(text("SELECT instructions FROM orders LIMIT 1"))
+                        logger.info("instructions column already exists")
+                    except Exception:
+                        logger.info("Adding instructions column to orders table")
+                        session.execute(
+                            text("ALTER TABLE orders ADD COLUMN instructions TEXT")
+                        )
+                        session.commit()
+                        logger.info("Successfully added instructions column")
+                else:
+                    # PostgreSQL migration
+                    try:
+                        session.execute(text("SELECT instructions FROM orders LIMIT 1"))
+                        logger.info("instructions column already exists")
+                    except Exception:
+                        logger.info("Adding instructions column to orders table")
+                        session.execute(
+                            text("ALTER TABLE orders ADD COLUMN instructions TEXT")
+                        )
+                        session.commit()
+                        logger.info("Successfully added instructions column")
+
         except Exception as e:
             logger.error(f"Migration failed: {e}")
             # Don't raise exception to allow system to continue
@@ -547,6 +577,7 @@ class DatabaseManager:
                     shipping_address=shipping_address,
                     payment_token=payment_token,
                     automation_metadata=metadata,
+                    instructions=instructions,
                 )
                 session.add(order)
                 session.commit()
@@ -660,6 +691,7 @@ class DatabaseManager:
         error_message: Optional[str] = None,
         requires_human_review: Optional[bool] = None,
         session_id: Optional[str] = None,
+        started_at: Optional[datetime] = None,
     ):
         """Update order status and related fields"""
         try:
@@ -672,7 +704,8 @@ class DatabaseManager:
                     raise ValueError(f"Order {order_id} not found")
 
                 now = datetime.now(timezone.utc)
-                order_model.status = status.value
+                # Handle both OrderStatus enum and string
+                order_model.status = status.value if hasattr(status, 'value') else status
                 order_model.updated_at = now
 
                 if progress is not None:
@@ -700,8 +733,13 @@ class DatabaseManager:
                     order_model.session_id = session_id
 
                 # Set timestamps based on status
-                if status == OrderStatus.PROCESSING and not order_model.started_at:
-                    order_model.started_at = now
+                if status == OrderStatus.PROCESSING:
+                    # Update started_at if explicitly provided (for retry scenarios)
+                    # or set it if not already set (first time processing)
+                    if started_at is not None:
+                        order_model.started_at = started_at
+                    elif not order_model.started_at:
+                        order_model.started_at = now
                 elif status in [
                     OrderStatus.COMPLETED,
                     OrderStatus.FAILED,
@@ -794,6 +832,60 @@ class DatabaseManager:
 
         except Exception as e:
             logger.error(f"DatabaseManager.add_screenshot({order_id}) failed: {e}")
+            raise
+
+    def update_order(self, order_id: str, updates: Dict[str, Any]):
+        """Update order fields"""
+        try:
+            with self.get_session() as session:
+                order_model = (
+                    session.query(OrderModel).filter(OrderModel.id == order_id).first()
+                )
+
+                if not order_model:
+                    raise ValueError(f"Order {order_id} not found")
+
+                now = datetime.now(timezone.utc)
+                order_model.updated_at = now
+
+                # Update allowed fields
+                if 'product_name' in updates:
+                    order_model.product_name = updates['product_name']
+                if 'product_url' in updates:
+                    order_model.product_url = updates['product_url']
+                if 'product_size' in updates:
+                    order_model.product_size = updates['product_size']
+                if 'product_color' in updates:
+                    order_model.product_color = updates['product_color']
+                if 'instructions' in updates:
+                    order_model.instructions = updates['instructions']
+                if 'customer_name' in updates:
+                    order_model.customer_name = updates['customer_name']
+                if 'customer_email' in updates:
+                    order_model.customer_email = updates['customer_email']
+                if 'shipping_address' in updates:
+                    # Merge with existing shipping address
+                    import json
+                    # Check if shipping_address is already a dict or needs to be parsed
+                    if isinstance(order_model.shipping_address, str):
+                        existing_address = json.loads(order_model.shipping_address)
+                    elif isinstance(order_model.shipping_address, dict):
+                        existing_address = order_model.shipping_address
+                    else:
+                        existing_address = {}
+                    
+                    # Only update non-empty values
+                    for key, value in updates['shipping_address'].items():
+                        if value and value.strip():  # Only update if value is not empty
+                            existing_address[key] = value
+                    
+                    order_model.shipping_address = json.dumps(existing_address)
+
+                session.commit()
+                logger.info(f"Updated order {order_id} with fields: {list(updates.keys())}")
+
+        except Exception as e:
+            logger.error(f"DatabaseManager.update_order({order_id}) failed: {e}")
             raise
 
     def update_session_replay_info(
@@ -1180,6 +1272,20 @@ class DatabaseManager:
             logger.error(f"DatabaseManager.cleanup_old_sessions() failed: {e}")
             raise
 
+    def _parse_json_field(self, field_value):
+        """Parse JSON field that might be string or dict"""
+        if field_value is None:
+            return None
+        if isinstance(field_value, dict):
+            return field_value
+        if isinstance(field_value, str):
+            try:
+                import json
+                return json.loads(field_value)
+            except:
+                return field_value
+        return field_value
+
     def _model_to_order(self, order_model: OrderModel) -> Order:
         """Convert SQLAlchemy model to Order dataclass"""
         return Order(
@@ -1196,7 +1302,7 @@ class DatabaseManager:
             product_price=order_model.product_price,
             customer_name=order_model.customer_name,
             customer_email=order_model.customer_email,
-            shipping_address=order_model.shipping_address,
+            shipping_address=self._parse_json_field(order_model.shipping_address),
             payment_token=order_model.payment_token,
             created_at=order_model.created_at,
             updated_at=order_model.updated_at,
@@ -1214,6 +1320,7 @@ class DatabaseManager:
             metadata=order_model.automation_metadata,
             execution_logs=order_model.execution_logs or [],
             screenshots=order_model.screenshots or [],
+            instructions=order_model.instructions,
         )
 
     def _model_to_session(self, session_model: SessionModel) -> BrowserSession:

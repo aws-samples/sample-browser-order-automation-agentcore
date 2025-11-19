@@ -35,14 +35,23 @@ resource "null_resource" "build_frontend" {
 
   provisioner "local-exec" {
     command = <<-EOT
-      echo "Building frontend directly in source directory..."
-      cd ../frontend
+      echo "Building frontend in isolated terraform build directory..."
       
-      # Clean previous build
-      rm -rf build
-      rm -rf node_modules/.cache
+      # Create isolated build directory
+      BUILD_DIR="../.terraform-build/frontend"
+      rm -rf "$BUILD_DIR"
+      mkdir -p "$BUILD_DIR"
       
-      # Install dependencies
+      # Copy frontend source to isolated directory
+      echo "Copying frontend source..."
+      cp -r ../frontend/* "$BUILD_DIR/"
+      
+      cd "$BUILD_DIR"
+      
+      # Clean any existing build artifacts
+      rm -rf build node_modules/.cache
+      
+      # Install dependencies in isolated directory
       echo "Installing dependencies..."
       npm ci --production=false
       
@@ -75,14 +84,17 @@ resource "null_resource" "upload_frontend" {
     command = <<-EOT
       echo "Uploading frontend to S3..."
       
+      # Use isolated build directory
+      BUILD_DIR="../.terraform-build/frontend/build"
+      
       # Verify build directory exists
-      if [ ! -d "../frontend/build" ]; then
-        echo "ERROR: Build directory not found"
+      if [ ! -d "$BUILD_DIR" ]; then
+        echo "ERROR: Build directory not found at $BUILD_DIR"
         exit 1
       fi
       
       # Upload static assets with long cache
-      aws s3 sync ../frontend/build/ s3://${aws_s3_bucket.static_assets.bucket}/ \
+      aws s3 sync "$BUILD_DIR/" s3://${aws_s3_bucket.static_assets.bucket}/ \
         --delete \
         --cache-control "public, max-age=31536000" \
         --exclude "*.html" \
@@ -90,7 +102,7 @@ resource "null_resource" "upload_frontend" {
         --exclude "manifest.json"
       
       # Upload HTML and service worker with no cache
-      aws s3 sync ../frontend/build/ s3://${aws_s3_bucket.static_assets.bucket}/ \
+      aws s3 sync "$BUILD_DIR/" s3://${aws_s3_bucket.static_assets.bucket}/ \
         --cache-control "public, max-age=0, must-revalidate" \
         --include "*.html" \
         --include "service-worker.js" \

@@ -45,7 +45,7 @@ const OrderDashboard = ({ addNotification }) => {
 
   const [errorCount, setErrorCount] = useState(0);
   const [hasError, setHasError] = useState(false);
-  const [queueStatus, setQueueStatus] = useState('active'); // active, paused
+  
   const fetchDashboardData = useCallback(async () => {
     // Skip if we've had too many errors
     if (errorCount >= 5) {
@@ -70,7 +70,6 @@ const OrderDashboard = ({ addNotification }) => {
 
       setOrders(Array.isArray(ordersData.orders) ? ordersData.orders : []);
       setRetailers(retailersData);
-      setQueueStatus(queueData.status || 'active');
       setLoading(false);
       setErrorCount(0);
       setHasError(false);
@@ -150,57 +149,7 @@ const OrderDashboard = ({ addNotification }) => {
 
 
 
-  const handleQueuePause = async () => {
-    try {
-      const response = await fetch('/api/queue/pause', { method: 'POST' });
 
-      if (!response.ok) {
-        throw new Error('Failed to pause queue');
-      }
-
-      addNotification({
-        type: 'success',
-        header: 'Queue Paused',
-        content: 'Order processing queue has been paused successfully'
-      });
-
-      setQueueStatus('paused');
-      fetchDashboardData();
-
-    } catch (error) {
-      addNotification({
-        type: 'error',
-        header: 'Queue Pause Failed',
-        content: `Failed to pause queue: ${error.message}`
-      });
-    }
-  };
-
-  const handleQueueResume = async () => {
-    try {
-      const response = await fetch('/api/queue/resume', { method: 'POST' });
-
-      if (!response.ok) {
-        throw new Error('Failed to resume queue');
-      }
-
-      addNotification({
-        type: 'success',
-        header: 'Queue Resumed',
-        content: 'Order processing queue has been resumed successfully'
-      });
-
-      setQueueStatus('active');
-      fetchDashboardData();
-
-    } catch (error) {
-      addNotification({
-        type: 'error',
-        header: 'Queue Resume Failed',
-        content: `Failed to resume queue: ${error.message}`
-      });
-    }
-  };
 
   const handleDeleteCompleted = async () => {
     try {
@@ -637,16 +586,6 @@ const OrderDashboard = ({ addNotification }) => {
                       text: 'Upload CSV'
                     },
                     {
-                      id: 'pause-queue',
-                      text: 'Pause',
-                      disabled: queueStatus === 'paused'
-                    },
-                    {
-                      id: 'resume-queue',
-                      text: 'Resume',
-                      disabled: queueStatus === 'active'
-                    },
-                    {
                       id: 'delete',
                       text: selectedItems.length > 0 ? `Delete Selected (${selectedItems.length})` : 'Delete Completed',
                       disabled: false
@@ -660,12 +599,6 @@ const OrderDashboard = ({ addNotification }) => {
                         break;
                       case 'upload-csv':
                         handleUploadCSV();
-                        break;
-                      case 'pause-queue':
-                        handleQueuePause();
-                        break;
-                      case 'resume-queue':
-                        handleQueueResume();
                         break;
                       case 'delete':
                         if (selectedItems.length > 0) {

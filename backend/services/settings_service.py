@@ -131,6 +131,10 @@ class SettingsService:
         """Get list of available foundation models"""
         return [
             {
+                "value": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                "label": "Claude Sonnet 4.5 (Global)",
+            },
+            {
                 "value": "us.anthropic.claude-sonnet-4-20250514-v1:0",
                 "label": "Claude Sonnet 4",
             },
@@ -237,7 +241,7 @@ class SettingsService:
                 ),
                 "execution_role_arn": system_config.get("execution_role_arn", ""),
                 "default_model": system_config.get(
-                    "default_model", "us.anthropic.claude-sonnet-4-20250514-v1:0"
+                    "default_model", "global.anthropic.claude-sonnet-4-5-20250929-v1:0"
                 ),
                 "nova_act_api_key": system_config.get("nova_act_api_key", ""),
             }

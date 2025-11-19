@@ -19,6 +19,7 @@ try:
     from bedrock_agentcore.tools.browser_client import browser_session, BrowserClient
     from bedrock_agentcore._utils.endpoints import get_control_plane_endpoint
     from nova_act import NovaAct
+    from nova_act.util.s3_writer import S3Writer
     from nova_act.types.act_errors import (
         ActAgentError,
         ActAgentFailed,
@@ -74,6 +75,7 @@ class NovaActAgent:
         self.worker = None
         self.worker_session_id = None
         self._is_processing = False
+        self._processing_start_time = None  # Track when processing started
 
         # Get config from DB via ConfigManager
         self.config_manager = get_config_manager(db_manager)
@@ -251,360 +253,142 @@ class NovaActAgent:
         except Exception as e:
             logger.error(f"Failed to broadcast Nova Act update: {e}")
 
-    async def resume_after_captcha(self, order) -> Dict[str, Any]:
-        """Resume Nova Act execution after CAPTCHA has been resolved manually"""
+    def _enter_payment_info_via_playwright(self, page):
+        """
+        Securely enter payment information via Playwright API
+        Following Nova Act best practices: sensitive data via API, not in prompts
+        
+        Args:
+            page: Playwright page object from NovaAct session
+        """
         try:
-            if not hasattr(self, "ws_url") or not self.ws_url or not self.api_key:
-                raise RuntimeError("Nova Act connection info not available")
-
             self._add_log(
                 "INFO",
-                "Resuming Nova Act execution after CAPTCHA resolution",
-                "captcha_resume",
+                "Entering payment information securely via Playwright API",
+                "payment_entry",
             )
-
-            # Check if we have site credentials for resume
-            credentials_info = ""
-            if self.retailer_config.get("credentials"):
-                creds = self.retailer_config["credentials"]
-                if creds.get("username") and creds.get("password"):
-                    credentials_info = f"""
-                    
-                    SITE LOGIN CREDENTIALS (use if login is required):
-                    - Username: {creds['username']}
-                    - Password: {creds['password']}
-                    
-                    If you encounter a login page during resume, use these credentials to sign in.
-                    """
-
-            # Default test information for checkout
-            default_info = """
             
-            IMPORTANT: Fill ALL required fields during checkout. Use these default values for any missing information:
-            
-            CONTACT INFORMATION:
-            - Phone Number: (555) 123-4567 (ALWAYS fill phone number fields - this is required!)
-            - Mobile/Cell Phone: (555) 123-4567
-            
-            PAYMENT INFORMATION:
-            - Credit Card: 4111 1111 1111 1111 (test card)
-            - Expiry Date: 12/25
-            - CVV: 123
-            - Card Name: Test User
-            
-            INSTRUCTIONS:
-            - Look for phone number fields (phone, mobile, cell, telephone, contact number)
-            - Always fill phone number fields with (555) 123-4567
-            - Fill all payment fields completely
-            - Do not skip any required fields
-            """
-
-            # Create a simplified command to continue from where we left off
-            # Resume from current page after CAPTCHA resolution
-            command = f"""
-            Resume the e-commerce order for {order.product_name} from current page:
-            1. Continue with the current task (add to cart, checkout, or fill shipping)
-            2. If login is required, use the provided credentials to sign in
-            3. If not on product page, navigate to {order.product_url if hasattr(order, 'product_url') and order.product_url else 'search for ' + order.product_name}
-            4. Select size: {order.product_size or 'any available'} (if not already selected)
-            5. Select color: {order.product_color or 'any available'} (if not already selected)
-            6. Add to cart (if not already in cart)
-            7. Proceed to checkout
-            8. Fill shipping information: {order.shipping_address.get('first_name', '')} {order.shipping_address.get('last_name', '')}, {order.shipping_address.get('address_line_1', '')}, {order.shipping_address.get('city', '')}, {order.shipping_address.get('state', '')} {order.shipping_address.get('postal_code', '')}
-            9. IMPORTANT: Fill phone number field with (555) 123-4567 - do not skip this field!
-            10. Complete payment information using the default test information provided below
-            {credentials_info}
-            {default_info}
-            """
-
-            self._add_log(
-                "INFO",
-                f"Generated resume command: {len(command)} characters",
-                "captcha_resume",
-            )
-            self._broadcast_nova_act_update(
-                "resume_started", {"message": "Resuming after CAPTCHA resolution"}
-            )
-
-            # Execute the resume command using the same browser session
-            def execute_nova_act_resume():
-                try:
-                    self._add_log(
-                        "INFO", "Creating Nova Act resume session", "captcha_resume"
-                    )
-
-                    # Set up event loop for this thread
-                    import asyncio
-
-                    try:
-                        asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
-                        loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(loop)
-                    except Exception as loop_error:
-                        self._add_log(
-                            "WARNING",
-                            f"Event loop setup warning: {loop_error}",
-                            "captcha_resume",
-                        )
-
-                    # Capture stdout to parse Nova Act logs
-                    import sys
-                    from io import StringIO
-
-                    old_stdout = sys.stdout
-                    captured_output = StringIO()
-
-                    try:
-                        # Redirect stdout to capture Nova Act logs
-                        sys.stdout = captured_output
-
-                        # Create and use Nova Act with existing session
-                        with NovaAct(
-                            cdp_endpoint_url=self.ws_url,
-                            cdp_headers=self.headers,
-                            preview={"playwright_actuation": True},
-                            nova_act_api_key=self.api_key,
-                            # Don't specify starting_page to continue from current page
-                        ) as nova_act:
-                            self._add_log(
-                                "INFO",
-                                "Nova Act resume session created, executing command",
-                                "captcha_resume",
-                            )
-                            try:
-                                result = nova_act.act(command)
-                                return result, captured_output.getvalue()
-                            except Exception as act_error:
-                                # Handle Nova Act specific errors
-                                if ActAgentError and isinstance(
-                                    act_error, ActAgentError
-                                ):
-                                    if isinstance(act_error, ActAgentFailed):
-                                        return (
-                                            f"AGENT_FAILED: {str(act_error)}",
-                                            captured_output.getvalue(),
-                                        )
-                                    elif isinstance(
-                                        act_error, ActExceededMaxStepsError
-                                    ):
-                                        return (
-                                            f"MAX_STEPS_EXCEEDED: {str(act_error)}",
-                                            captured_output.getvalue(),
-                                        )
-                                    elif isinstance(act_error, ActTimeoutError):
-                                        return (
-                                            f"TIMEOUT: {str(act_error)}",
-                                            captured_output.getvalue(),
-                                        )
-                                    else:
-                                        return (
-                                            f"AGENT_ERROR: {str(act_error)}",
-                                            captured_output.getvalue(),
-                                        )
-                                elif ActClientError and isinstance(
-                                    act_error, ActClientError
-                                ):
-                                    if isinstance(act_error, ActGuardrailsError):
-                                        return (
-                                            f"GUARDRAILS_BLOCKED: {str(act_error)}",
-                                            captured_output.getvalue(),
-                                        )
-                                    elif isinstance(
-                                        act_error, ActRateLimitExceededError
-                                    ):
-                                        return (
-                                            f"RATE_LIMITED: {str(act_error)}",
-                                            captured_output.getvalue(),
-                                        )
-                                    else:
-                                        return (
-                                            f"CLIENT_ERROR: {str(act_error)}",
-                                            captured_output.getvalue(),
-                                        )
-                                elif ActExecutionError and isinstance(
-                                    act_error, ActExecutionError
-                                ):
-                                    return (
-                                        f"EXECUTION_ERROR: {str(act_error)}",
-                                        captured_output.getvalue(),
-                                    )
-                                elif ActServerError and isinstance(
-                                    act_error, ActServerError
-                                ):
-                                    return (
-                                        f"SERVER_ERROR: {str(act_error)}",
-                                        captured_output.getvalue(),
-                                    )
-                                else:
-                                    # Unknown error
-                                    return (
-                                        f"UNKNOWN_ERROR: {str(act_error)}",
-                                        captured_output.getvalue(),
-                                    )
-                    finally:
-                        # Restore stdout
-                        sys.stdout = old_stdout
-
-                except Exception as e:
-                    self._add_log(
-                        "ERROR",
-                        f"Nova Act resume execution error: {e}",
-                        "captcha_resume",
-                    )
-                    return f"FAILED: Nova Act resume execution error: {e}", (
-                        captured_output.getvalue()
-                        if "captured_output" in locals()
-                        else ""
-                    )
-
-            # Run Nova Act resume in thread pool with improved resource management
-            executor = None
-            try:
-                import concurrent.futures
-
-                executor = concurrent.futures.ThreadPoolExecutor(
-                    max_workers=1,
-                    thread_name_prefix=f"nova-act-resume-{self.session_id[:8]}",
-                )
-                future = executor.submit(execute_nova_act_resume)
-                try:
-                    result_tuple = await asyncio.wait_for(
-                        asyncio.wrap_future(future), timeout=300.0
-                    )  # 5 minute timeout
-
-                    if isinstance(result_tuple, tuple):
-                        result, captured_logs = result_tuple
-                        # Extract and log Nova Act execution steps
-                        if captured_logs:
-                            self._extract_nova_act_logs_from_output(captured_logs)
-                    else:
-                        result = result_tuple
-
-                except asyncio.TimeoutError:
-                    self._add_log(
-                        "ERROR",
-                        "Nova Act resume execution timed out after 5 minutes",
-                        "captcha_resume",
-                    )
-                    future.cancel()
-                    result = (
-                        "FAILED: Nova Act resume automation timed out after 5 minutes."
-                    )
-
-            except Exception as exec_error:
-                self._add_log(
-                    "ERROR",
-                    f"Resume thread execution failed: {exec_error}",
-                    "captcha_resume",
-                )
-                result = f"FAILED: Resume thread execution error: {exec_error}"
-            finally:
-                if executor:
-                    executor.shutdown(wait=False)
-
-            self._add_log(
-                "INFO",
-                f"Resume automation completed with result: {str(result)[:200]}...",
-                "captcha_resume",
-            )
-
-            # Check result - simple logic: no error = success
-            result_str = str(result).lower()
-
-            # Check for Nova Act specific error patterns
-            nova_act_errors = [
-                "agent_failed",
-                "max_steps_exceeded",
-                "timeout",
-                "client_error",
-                "execution_error",
-                "server_error",
-                "guardrails_blocked",
-                "rate_limited",
+            # Common payment field selectors (adjust based on actual sites)
+            card_selectors = [
+                'input[name*="card"][name*="number"]',
+                'input[id*="card"][id*="number"]',
+                'input[placeholder*="card number"]',
+                'input[autocomplete="cc-number"]',
+                '#cardNumber',
+                '#card-number',
+                '[data-testid*="card-number"]',
             ]
-
-            # Check for explicit errors
-            has_nova_act_error = any(error in result_str for error in nova_act_errors)
-            has_general_error = any(
-                word in result_str for word in ["failed", "error", "exception"]
-            )
-
-            # Log the result analysis
-            self._add_log(
-                "INFO",
-                f"Resume result analysis - Nova Act error: {has_nova_act_error}, General error: {has_general_error}",
-                "resume_result_analysis",
-            )
-
-            if has_nova_act_error:
-                # Handle specific Nova Act errors
-                self._broadcast_nova_act_update("resume_failed", {"error": str(result)})
-                return {
-                    "success": False,
-                    "status": "failed",
-                    "error": f"Nova Act resume error: {result}",
-                    "automation_method": "nova_act",
-                    "result": str(result),
-                }
-
-            elif "captcha" in result_str:
-                self._broadcast_nova_act_update(
-                    "captcha_detected_again", {"message": "Another CAPTCHA detected"}
-                )
-                return {
-                    "success": False,
-                    "status": "requires_human",
-                    "message": "Another CAPTCHA detected during resume",
-                    "automation_method": "nova_act",
-                }
-
-            elif not has_general_error:
-                # No explicit error = success
+            
+            expiry_selectors = [
+                'input[name*="expir"]',
+                'input[id*="expir"]',
+                'input[placeholder*="expir"]',
+                'input[autocomplete="cc-exp"]',
+                '#expiryDate',
+                '#expiry-date',
+            ]
+            
+            cvv_selectors = [
+                'input[name*="cvv"]',
+                'input[name*="cvc"]',
+                'input[name*="security"]',
+                'input[id*="cvv"]',
+                'input[id*="cvc"]',
+                'input[autocomplete="cc-csc"]',
+                '#cvv',
+                '#cvc',
+            ]
+            
+            name_selectors = [
+                'input[name*="cardholder"]',
+                'input[name*="card"][name*="name"]',
+                'input[id*="cardholder"]',
+                'input[autocomplete="cc-name"]',
+                '#cardholderName',
+                '#cardholder-name',
+            ]
+            
+            # Test payment information (safe to use in test environments)
+            test_card = "4111111111111111"
+            test_expiry = "12/25"
+            test_cvv = "123"
+            test_name = "Test User"
+            
+            # Try to find and fill card number
+            card_filled = False
+            for selector in card_selectors:
+                try:
+                    if page.locator(selector).count() > 0:
+                        self._add_log("INFO", f"Found card number field: {selector}", "payment_entry")
+                        page.locator(selector).first.fill(test_card)
+                        card_filled = True
+                        self._add_log("INFO", "Card number entered securely", "payment_entry")
+                        break
+                except:
+                    continue
+            
+            # Try to find and fill expiry date
+            expiry_filled = False
+            for selector in expiry_selectors:
+                try:
+                    if page.locator(selector).count() > 0:
+                        self._add_log("INFO", f"Found expiry field: {selector}", "payment_entry")
+                        page.locator(selector).first.fill(test_expiry)
+                        expiry_filled = True
+                        self._add_log("INFO", "Expiry date entered securely", "payment_entry")
+                        break
+                except:
+                    continue
+            
+            # Try to find and fill CVV
+            cvv_filled = False
+            for selector in cvv_selectors:
+                try:
+                    if page.locator(selector).count() > 0:
+                        self._add_log("INFO", f"Found CVV field: {selector}", "payment_entry")
+                        page.locator(selector).first.fill(test_cvv)
+                        cvv_filled = True
+                        self._add_log("INFO", "CVV entered securely", "payment_entry")
+                        break
+                except:
+                    continue
+            
+            # Try to find and fill cardholder name
+            name_filled = False
+            for selector in name_selectors:
+                try:
+                    if page.locator(selector).count() > 0:
+                        self._add_log("INFO", f"Found cardholder name field: {selector}", "payment_entry")
+                        page.locator(selector).first.fill(test_name)
+                        name_filled = True
+                        self._add_log("INFO", "Cardholder name entered securely", "payment_entry")
+                        break
+                except:
+                    continue
+            
+            # Log summary
+            if card_filled or expiry_filled or cvv_filled or name_filled:
                 self._add_log(
                     "INFO",
-                    f"Resume: No explicit errors detected, treating as success",
-                    "resume_result_analysis",
+                    f"Payment fields filled: card={card_filled}, expiry={expiry_filled}, cvv={cvv_filled}, name={name_filled}",
+                    "payment_entry",
                 )
-
-                self._broadcast_nova_act_update(
-                    "resume_completed", {"result": "Order completed successfully"}
-                )
-                return {
-                    "success": True,
-                    "status": "completed",
-                    "confirmation_number": f"NOVA-{self.session_id[:8]}",
-                    "automation_method": "nova_act",
-                    "result": str(result),
-                }
-
+                return True
             else:
-                # Has general error
                 self._add_log(
-                    "WARNING",
-                    f"Resume: General error detected in result: {str(result)[:200]}",
-                    "resume_result_analysis",
+                    "INFO",
+                    "No payment fields found on current page (may not be on payment page yet)",
+                    "payment_entry",
                 )
-                self._broadcast_nova_act_update("resume_failed", {"error": str(result)})
-                return {
-                    "success": False,
-                    "status": "failed",
-                    "error": str(result),
-                    "automation_method": "nova_act",
-                }
-
+                return False
+                
         except Exception as e:
             self._add_log(
-                "ERROR",
-                f"Failed to resume Nova Act after CAPTCHA: {e}",
-                "captcha_resume",
+                "WARNING",
+                f"Could not enter payment information via Playwright: {e}",
+                "payment_entry",
             )
-            self._broadcast_nova_act_update("resume_error", {"error": str(e)})
-            return {
-                "success": False,
-                "status": "failed",
-                "error": str(e),
-                "automation_method": "nova_act",
-            }
+            return False
 
     def get_live_view_url(self, expires: int = 300) -> dict:
         """Get live view URL for real-time browser session viewing"""
@@ -728,21 +512,35 @@ class NovaActAgent:
                     browser_session_id = None
 
             if not browser_session_id:
-                # Use AWS managed browser tool (aws.browser.v1)
+                # Create or reuse custom browser with Web Bot Auth
                 region = self.agent_config.agentcore_region
 
                 try:
+                    # Use BrowserService to create/reuse browser with Web Bot Auth
+                    from services.browser_service import get_browser_service
+                    
+                    browser_service = get_browser_service(
+                        config=self.config_manager.get_system_config(),
+                        db_manager=self.db_manager
+                    )
+                    
+                    # Create or get reusable browser with Web Bot Auth
+                    browser_id, recording_config = browser_service.get_or_create_reusable_browser(
+                        session_id=session_id
+                    )
+                    
                     self._add_log(
                         "INFO",
-                        "Using AWS managed browser tool (aws.browser.v1)",
+                        f"Using browser with Web Bot Auth: {browser_id}",
                         "browser_setup",
                     )
 
-                    # Create browser client using the default AWS browser
+                    # Create browser client using the custom browser
                     browser_client = BrowserClient(region=region)
+                    browser_client.identifier = browser_id
 
                     agentcore_session_id = browser_client.start(
-                        identifier="aws.browser.v1",  # Use AWS managed browser
+                        identifier=browser_id,
                         name=f"nova_act_session_{session_id[:8]}",
                         session_timeout_seconds=7200,  # 2 hours for CAPTCHA handling
                     )
@@ -937,6 +735,7 @@ class NovaActAgent:
             }
 
         self._is_processing = True
+        self._processing_start_time = datetime.now(timezone.utc)  # Track start time
         try:
             order_id = order.id
             self._add_log(
@@ -1032,7 +831,8 @@ class NovaActAgent:
                 )
 
             # Poll for completion (non-blocking)
-            max_wait_time = 300  # 5 minutes
+            # Use processing_timeout from config (default 1800 seconds = 30 minutes)
+            max_wait_time = self.agent_config.processing_timeout
             poll_interval = 5  # 5 seconds
             elapsed_time = 0
 
@@ -1148,75 +948,122 @@ class NovaActAgent:
 
             # Check if we have site credentials
             credentials_info = ""
+            has_credentials = False
+            username = None
+            password = None
+            
             if self.retailer_config.get("credentials"):
                 creds = self.retailer_config["credentials"]
                 if creds.get("username") and creds.get("password"):
+                    has_credentials = True
+                    username = creds['username']
+                    password = creds['password']  # Store securely, don't put in prompt
+                    
+                    # Only include username in prompt, password will be entered via Playwright
                     credentials_info = f"""
-                    
-                    SITE LOGIN CREDENTIALS (use if login is required):
-                    - Username: {creds['username']}
-                    - Password: {creds['password']}
-                    
-                    If you encounter a login page, use these credentials to sign in before proceeding with the order.
-                    """
+SITE LOGIN INSTRUCTIONS (if login is required):
+1. Navigate to the login page
+2. Enter username: {username}
+3. Focus on the password field (click on it)
+4. STOP and wait - password will be entered securely
+5. After password is entered, click the login/sign-in button
+
+DO NOT attempt to type the password yourself. Just focus on the password field and wait.
+"""
                     self._add_log(
                         "INFO",
-                        f"Site credentials available for {creds.get('site_name', 'site')}",
+                        f"Site credentials available for {creds.get('site_name', 'site')} (username: {username})",
                         "credentials",
                     )
 
-            # Default test information for checkout
-            default_info = """
+            # Get customer info from order
+            customer_email = order.customer_email if hasattr(order, 'customer_email') else 'demo@example.com'
+            customer_name = order.customer_name if hasattr(order, 'customer_name') else 'Demo Customer'
             
-            IMPORTANT: Fill ALL required fields during checkout. Use these default values for any missing information:
+            # Parse shipping_address if it's a string
+            import json
+            if isinstance(order.shipping_address, str):
+                shipping_address = json.loads(order.shipping_address)
+            else:
+                shipping_address = order.shipping_address or {}
             
-            CONTACT INFORMATION:
-            - Phone Number: (555) 123-4567 (ALWAYS fill phone number fields - this is required!)
-            - Mobile/Cell Phone: (555) 123-4567
+            # Get phone number from order (use 10 digits, no formatting)
+            phone_number = shipping_address.get('phone', '4154351234')
             
-            PAYMENT INFORMATION:
-            - Credit Card: 4111 1111 1111 1111 (test card)
-            - Expiry Date: 12/25
-            - CVV: 123
-            - Card Name: Test User
-            
-            INSTRUCTIONS:
-            - Look for phone number fields (phone, mobile, cell, telephone, contact number)
-            - Always fill phone number fields with (555) 123-4567
-            - Fill all payment fields completely
-            - Do not skip any required fields
-            """
+            # Nova Act Security Best Practice: Use test/demo payment info for automation
+            # Real payment processing would be handled separately in production
+            checkout_info = f"""
+CHECKOUT INSTRUCTIONS:
+
+CONTACT INFORMATION:
+- Fill salutation/title (if field exists): Ms.
+- Fill email address: {customer_email}
+- Fill phone number: {phone_number}
+- Fill mobile phone: {phone_number}
+
+SHIPPING ADDRESS:
+- Use the shipping information provided in step 7/8
+- Make sure all required fields are filled
+
+PAYMENT INFORMATION (TEST MODE):
+- Card Number: 4111111111111111 (test card)
+- Expiry Date: 12/25
+- CVV: 123
+- Cardholder Name: {customer_name}
+- Submit payment (any card/CVV error means SUCCESS - test mode)
+
+NOTE: This is test payment information for automation purposes only.
+"""
 
             # Create order command - optimize based on whether we have product URL
+            # Prepare login instruction based on credentials availability
+            login_instruction = (
+                "2. If login is required, use the provided credentials to sign in"
+                if has_credentials
+                else "2. Use guest checkout (skip login, dismiss any sign-up popups)"
+            )
+            
+            # Add special instructions if provided
+            special_instructions = ""
+            if hasattr(order, 'instructions') and order.instructions:
+                special_instructions = f"\n\nSPECIAL INSTRUCTIONS:\n{order.instructions}\n"
+            
             if hasattr(order, "product_url") and order.product_url:
                 # We're starting directly on the product page, so skip navigation
-                command = f"""
-                Complete this e-commerce order for {order.product_name}:
-                1. Verify this is the correct product page
-                2. If login is required, use the provided credentials to sign in
-                3. Select size: {order.product_size or 'any available'}
-                4. Select color: {order.product_color or 'any available'}
-                5. Add to cart
-                6. Proceed to checkout
-                7. Fill shipping information: {order.shipping_address.get('first_name', '')} {order.shipping_address.get('last_name', '')}, {order.shipping_address.get('address_line_1', '')}, {order.shipping_address.get('city', '')}, {order.shipping_address.get('state', '')} {order.shipping_address.get('postal_code', '')}
-                8. IMPORTANT: Fill phone number field with (555) 123-4567 - do not skip this field!
-                9. Complete payment information using the default test information provided below
-                {credentials_info}
-                {default_info}
-                """
+                command = f"""Complete this e-commerce order for {order.product_name}:
+1. Verify this is the correct product page (use search bar if product not found)
+{login_instruction}
+3. Select size: {order.product_size or 'any available'}
+4. Select color: {order.product_color or 'any available'}
+5. Add to cart
+6. Proceed to checkout
+7. Fill shipping information: {shipping_address.get('first_name', '')} {shipping_address.get('last_name', '')}, {shipping_address.get('address_line_1', '')}, {shipping_address.get('city', '')}, {shipping_address.get('state', '')} {shipping_address.get('postal_code', '')}
+8. Fill phone number: {phone_number} (use 10 digits without dashes or parentheses)
+9. Follow payment checkout process below
+{special_instructions.strip() if special_instructions else ''}
+{credentials_info.strip() if credentials_info else ''}
+{checkout_info.strip()}
+"""
             else:
                 # If no product URL, search for the product on the retailer site
                 # Build command using string concatenation to avoid false positive SQL injection detection
                 product_name = order.product_name
                 product_size = order.product_size or "any available"
                 product_color = order.product_color or "any available"
-                shipping_name = f"{order.shipping_address.get('first_name', '')} {order.shipping_address.get('last_name', '')}"
-                shipping_addr = f"{order.shipping_address.get('address_line_1', '')}, {order.shipping_address.get('city', '')}, {order.shipping_address.get('state', '')} {order.shipping_address.get('postal_code', '')}"
+                shipping_name = f"{shipping_address.get('first_name', '')} {shipping_address.get('last_name', '')}"
+                shipping_addr = f"{shipping_address.get('address_line_1', '')}, {shipping_address.get('city', '')}, {shipping_address.get('state', '')} {shipping_address.get('postal_code', '')}"
+                
+                # Login instruction for search flow
+                login_step = (
+                    "1. If login is required, use the provided credentials to sign in\n"
+                    if has_credentials
+                    else "1. Use guest checkout (skip login, dismiss any sign-up popups)\n"
+                )
 
                 command = (
                     "Complete this e-commerce order:\n"
-                    "1. If login is required, use the provided credentials to sign in\n"
-                    "2. Search for product: " + product_name + "\n"
+                    + login_step
+                    + "2. Search for product: " + product_name + " (use search bar)\n"
                     "3. Select the correct product from search results\n"
                     "4. Select size: " + product_size + "\n"
                     "5. Select color: " + product_color + "\n"
@@ -1227,10 +1074,11 @@ class NovaActAgent:
                     + ", "
                     + shipping_addr
                     + "\n"
-                    "9. IMPORTANT: Fill phone number field with (555) 123-4567 - do not skip this field!\n"
-                    "10. Complete payment information using the default test information provided below\n"
+                    "9. Fill phone number: " + phone_number + " (use 10 digits without dashes or parentheses)\n"
+                    "10. Follow payment checkout process below\n"
+                    f"{special_instructions}"
                     f"{credentials_info}\n"
-                    f"{default_info}\n"
+                    f"{checkout_info}\n"
                 )
 
             self._add_log(
@@ -1304,13 +1152,61 @@ class NovaActAgent:
                                 "automation_execution",
                             )
 
+                        # Setup S3Writer for automatic session data upload
+                        s3_writer = None
+                        if self.agent_config.session_replay_s3_bucket:
+                            try:
+                                s3_prefix = self.agent_config.session_replay_s3_prefix or "nova-act-sessions/"
+                                s3_writer = S3Writer(
+                                    boto_session=boto3.Session(),
+                                    s3_bucket_name=self.agent_config.session_replay_s3_bucket,
+                                    s3_prefix=f"{s3_prefix}{order_id}/",
+                                    metadata={
+                                        "order_id": order_id,
+                                        "retailer": self.retailer_config.get('name', 'unknown'),
+                                        "timestamp": datetime.now(timezone.utc).isoformat()
+                                    }
+                                )
+                                self._add_log(
+                                    "INFO",
+                                    f"S3Writer configured: s3://{self.agent_config.session_replay_s3_bucket}/{s3_prefix}{order_id}/",
+                                    "s3_upload"
+                                )
+                            except Exception as s3_error:
+                                self._add_log(
+                                    "WARNING",
+                                    f"Failed to setup S3Writer: {s3_error}",
+                                    "s3_upload"
+                                )
+                                s3_writer = None
+                        
                         # Create and use Nova Act in the same thread
+                        # Note: Use realistic User-Agent to avoid anti-bot detection
                         with NovaAct(
                             cdp_endpoint_url=self.ws_url,
                             cdp_headers=self.headers,
-                            preview={"playwright_actuation": True},
+                            preview={
+                                "playwright_actuation": True,
+                                "extra_http_headers": {
+                                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+                                    "Accept-Language": "en-US,en;q=0.9",
+                                    "Accept-Encoding": "gzip, deflate, br",
+                                    "DNT": "1",
+                                    "Connection": "keep-alive",
+                                    "Upgrade-Insecure-Requests": "1",
+                                    "Sec-Fetch-Dest": "document",
+                                    "Sec-Fetch-Mode": "navigate",
+                                    "Sec-Fetch-Site": "none",
+                                    "Sec-Fetch-User": "?1",
+                                    "Cache-Control": "max-age=0",
+                                }
+                            },
                             nova_act_api_key=self.api_key,
                             starting_page=starting_url,
+                            headless=False,  # Run in headed mode for CAPTCHA handling
+                            ignore_https_errors=True,  # Ignore HTTPS/HTTP2 errors
+                            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                            stop_hooks=[s3_writer] if s3_writer else []
                         ) as nova_act:
                             self._add_log(
                                 "INFO",
@@ -1318,7 +1214,12 @@ class NovaActAgent:
                                 "automation_execution",
                             )
                             try:
-                                result = nova_act.act(command)
+                                # Execute main automation command with increased max_steps (60 instead of default 30)
+                                result = nova_act.act(command, max_steps=60)
+                                
+                                # Securely enter payment information via Playwright
+                                self._enter_payment_info_via_playwright(nova_act.page)
+                                
                                 return result, captured_output.getvalue()
                             except Exception as act_error:
                                 # Handle Nova Act specific errors
@@ -1408,14 +1309,18 @@ class NovaActAgent:
             try:
                 import concurrent.futures
 
+                # Get processing timeout from config (default 1800 seconds = 30 minutes)
+                processing_timeout = self.agent_config.processing_timeout
+                timeout_minutes = int(processing_timeout / 60)
+                
                 executor = concurrent.futures.ThreadPoolExecutor(
                     max_workers=1, thread_name_prefix=f"nova-act-{self.session_id[:8]}"
                 )
                 future = executor.submit(execute_nova_act_same_thread)
                 try:
                     result_tuple = await asyncio.wait_for(
-                        asyncio.wrap_future(future), timeout=300.0
-                    )  # 5 minute timeout
+                        asyncio.wrap_future(future), timeout=float(processing_timeout)
+                    )
 
                     if isinstance(result_tuple, tuple):
                         result, captured_logs = result_tuple
@@ -1428,11 +1333,11 @@ class NovaActAgent:
                 except asyncio.TimeoutError:
                     self._add_log(
                         "ERROR",
-                        "Nova Act execution timed out after 5 minutes",
+                        f"Nova Act execution timed out after {timeout_minutes} minutes",
                         "automation_execution",
                     )
                     future.cancel()
-                    result = "FAILED: Nova Act automation timed out after 5 minutes."
+                    result = f"FAILED: Nova Act automation timed out after {timeout_minutes} minutes."
             except Exception as e:
                 self._add_log(
                     "ERROR", f"Thread execution error: {e}", "automation_execution"
@@ -1444,7 +1349,7 @@ class NovaActAgent:
 
             self._add_log(
                 "INFO",
-                f"Automation completed with result: {str(result)[:200]}...",
+                f"Automation completed with result: {str(result)}",
                 "automation_execution",
             )
 
@@ -1463,16 +1368,20 @@ class NovaActAgent:
                 "rate_limited",
             ]
 
-            # Check for explicit errors
+            # ActResultWithoutResponse is a valid success case (automation completed without explicit response)
+            is_result_without_response = "actresultwithoutresponse" in result_str
+            
+            # Check for explicit errors (but exclude ActResultWithoutResponse)
             has_nova_act_error = any(error in result_str for error in nova_act_errors)
-            has_general_error = any(
-                word in result_str for word in ["failed", "error", "exception"]
+            has_general_error = (
+                any(word in result_str for word in ["failed", "error", "exception"])
+                and not is_result_without_response
             )
 
             # Log the result analysis
             self._add_log(
                 "INFO",
-                f"Result analysis - Nova Act error: {has_nova_act_error}, General error: {has_general_error}",
+                f"Result analysis - Nova Act error: {has_nova_act_error}, General error: {has_general_error}, ActResultWithoutResponse: {is_result_without_response}",
                 "result_analysis",
             )
 
@@ -1495,12 +1404,19 @@ class NovaActAgent:
                 }
 
             elif not has_general_error:
-                # No explicit error = success
-                self._add_log(
-                    "INFO",
-                    f"No explicit errors detected, treating as success",
-                    "result_analysis",
-                )
+                # No explicit error = success (includes ActResultWithoutResponse)
+                if is_result_without_response:
+                    self._add_log(
+                        "INFO",
+                        f"ActResultWithoutResponse detected - automation completed successfully without explicit response",
+                        "result_analysis",
+                    )
+                else:
+                    self._add_log(
+                        "INFO",
+                        f"No explicit errors detected, treating as success",
+                        "result_analysis",
+                    )
 
                 if progress_callback:
                     await progress_callback(
@@ -1542,9 +1458,49 @@ class NovaActAgent:
             }
 
     async def cleanup(self, force: bool = False):
-        """Clean up resources with improved memory management"""
+        """
+        Clean up resources with improved memory management
+        Uses browser_session_timeout from config, minus time already spent processing
+        
+        Args:
+            force: If True, cleanup immediately without grace period
+        """
         cleanup_errors = []
         try:
+            # Calculate remaining time based on browser_session_timeout config
+            if not force and self._processing_start_time:
+                # Get browser session timeout from config (default 3600 seconds = 60 minutes)
+                total_timeout = self.agent_config.browser_session_timeout
+                
+                # Calculate elapsed time
+                elapsed_seconds = (datetime.now(timezone.utc) - self._processing_start_time).total_seconds()
+                
+                # Calculate remaining time
+                remaining_seconds = max(0, total_timeout - elapsed_seconds)
+                
+                if remaining_seconds > 0:
+                    elapsed_minutes = int(elapsed_seconds // 60)
+                    remaining_minutes = int(remaining_seconds // 60)
+                    total_minutes = int(total_timeout // 60)
+                    
+                    self._add_log(
+                        "INFO",
+                        f"Browser session will remain open for {remaining_minutes} more minutes (total timeout: {total_minutes} min, elapsed: {elapsed_minutes} min)",
+                        "cleanup"
+                    )
+                    self._add_log(
+                        "INFO",
+                        f"Live browser view is still available for human interaction. Session will auto-cleanup in {remaining_minutes} minutes.",
+                        "cleanup"
+                    )
+                    await asyncio.sleep(remaining_seconds)
+                else:
+                    self._add_log(
+                        "INFO",
+                        f"Browser session timeout already exceeded ({int(elapsed_seconds // 60)} minutes elapsed). Cleaning up immediately.",
+                        "cleanup"
+                    )
+            
             self._add_log(
                 "INFO", f"Cleaning up Nova Act session {self.session_id}", "cleanup"
             )

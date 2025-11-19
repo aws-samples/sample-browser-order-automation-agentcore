@@ -40,10 +40,11 @@ class ConfigManager:
         "browser_session_timeout": 3600,
         "max_concurrent_orders": 5,
         "max_queue_size": 500,
-        "default_model": "us.anthropic.claude-sonnet-4-20250514-v1:0",
+        "default_model": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
         "nova_act_api_key": os.getenv("NOVA_ACT_API_KEY", ""),
         "execution_role_arn": "",
         "processing_timeout": 1800,
+        "browser_signing_enabled": True,  # Web Bot Auth (Preview) - Reduce CAPTCHAs
     }
 
     def __init__(self, db_manager=None):

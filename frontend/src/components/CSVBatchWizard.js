@@ -20,7 +20,7 @@ const CSVBatchWizard = ({ visible, onDismiss, onOrdersCreated, addNotification }
   const [currentStep, setCurrentStep] = useState(1);
   const [uploadFile, setUploadFile] = useState([]);
   const [automationMethod, setAutomationMethod] = useState({ value: 'strands', label: 'Strands + AgentCore Browser + Browser Tools' });
-  const [aiModel, setAiModel] = useState('us.anthropic.claude-sonnet-4-20250514-v1:0');
+  const [aiModel, setAiModel] = useState('global.anthropic.claude-sonnet-4-5-20250929-v1:0');
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [csvPreview, setCsvPreview] = useState(null);
@@ -131,7 +131,7 @@ const CSVBatchWizard = ({ visible, onDismiss, onOrdersCreated, addNotification }
     setCurrentStep(1);
     setUploadFile([]);
     setAutomationMethod({ value: 'strands', label: 'Strands + AgentCore Browser + Browser Tools' });
-    setAiModel('us.anthropic.claude-sonnet-4-20250514-v1:0');
+    setAiModel('global.anthropic.claude-sonnet-4-5-20250929-v1:0');
     setCsvPreview(null);
     setValidationResults(null);
     setUploadProgress(0);
@@ -314,7 +314,7 @@ const CSVBatchWizard = ({ visible, onDismiss, onOrdersCreated, addNotification }
             </div>
             <div>
               <Box variant="awsui-key-label">AI Model</Box>
-              <Box>{aiModel.includes('claude-sonnet-4') ? 'Claude Sonnet 4' : aiModel}</Box>
+              <Box>{aiModel.includes('claude-sonnet-4-5') ? 'Claude Sonnet 4.5 (Global)' : aiModel.includes('claude-sonnet-4') ? 'Claude Sonnet 4' : aiModel}</Box>
             </div>
           </ColumnLayout>
         </SpaceBetween>

@@ -44,6 +44,38 @@ lsof -ti:8000 | xargs kill -9 2>/dev/null || true
 lsof -ti:3000 | xargs kill -9 2>/dev/null || true
 sleep 2
 
+# Check if uv is installed
+if ! command -v uv >/dev/null 2>&1; then
+    echo "❌ uv not found. Installing uv..."
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="$HOME/.local/bin:$PATH"
+    if ! command -v uv >/dev/null 2>&1; then
+        echo "❌ Failed to install uv. Please install manually: https://docs.astral.sh/uv/"
+        exit 1
+    fi
+fi
+
+# Setup Python virtual environment with uv
+echo "🐍 Setting up Python environment with uv..."
+if [ ! -d "backend/.venv" ]; then
+    echo "📦 Creating virtual environment with uv..."
+    cd backend && uv venv && cd ..
+    if [ $? -ne 0 ]; then
+        echo "❌ Failed to create virtual environment"
+        exit 1
+    fi
+fi
+
+echo "📦 Installing/upgrading Python dependencies with uv..."
+cd backend
+uv pip install --upgrade -r requirements.txt --python .venv/bin/python
+cd ..
+
+if [ $? -ne 0 ]; then
+    echo "❌ Failed to install Python dependencies"
+    exit 1
+fi
+
 # Install frontend dependencies if needed
 if [ ! -d "frontend/node_modules" ]; then
     echo "📦 Installing frontend dependencies..."
@@ -96,5 +128,5 @@ npx concurrently \
     --restart-after 3000 \
     --timestamp-format "HH:mm:ss" \
     --success first \
-    "cd backend && PYTHONPATH=. python -m uvicorn app:app --host 0.0.0.0 --port 8000 --reload --reload-dir . --reload-include '*.py' --reload-exclude '*.pyc' --reload-exclude '__pycache__' --reload-exclude 'logs/*' --reload-exclude 'static/*' --log-level info --access-log --use-colors 2>&1 | tee ../logs/backend.log" \
+    "cd backend && source .venv/bin/activate && PYTHONPATH=. python -m uvicorn app:app --host 0.0.0.0 --port 8000 --reload --reload-dir . --reload-include '*.py' --reload-exclude '*.pyc' --reload-exclude '__pycache__' --reload-exclude 'logs/*' --reload-exclude 'static/*' --log-level info --access-log --use-colors 2>&1 | tee ../logs/backend.log" \
     "cd frontend && BROWSER=none PORT=3000 npm run dev 2>&1 | tee ../logs/frontend.log"

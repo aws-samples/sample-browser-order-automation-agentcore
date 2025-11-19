@@ -119,10 +119,32 @@ class StrandsAgent:
                     "INFO", f"Starting Strands session: {session_id}", "initialization"
                 )
 
-                # Create AgentCore browser client using default browser (like Nova Act)
+                # Create or reuse custom browser with Web Bot Auth
+                from services.browser_service import get_browser_service
+                from config import get_config_manager
+                
+                config_manager = get_config_manager(self.db_manager)
+                browser_service = get_browser_service(
+                    config=config_manager.get_system_config(),
+                    db_manager=self.db_manager
+                )
+                
+                # Create or get reusable browser with Web Bot Auth
+                browser_id, recording_config = browser_service.get_or_create_reusable_browser(
+                    session_id=session_id
+                )
+                
+                self._add_log(
+                    "INFO",
+                    f"Using browser with Web Bot Auth: {browser_id}",
+                    "initialization",
+                )
+                
+                # Create AgentCore browser client using custom browser
                 self.agentcore_client = AgentCoreBrowserClient(region=self.region)
+                self.agentcore_client.identifier = browser_id
                 agentcore_session_id = self.agentcore_client.start(
-                    identifier="aws.browser.v1",  # Use default browser like Nova Act
+                    identifier=browser_id,
                     session_timeout_seconds=3600,
                 )
 
@@ -347,6 +369,7 @@ class StrandsAgent:
                 supports_caching = (
                     "claude-3-7-sonnet" in model_to_use
                     or "claude-sonnet-4" in model_to_use
+                    or "claude-sonnet-4-5" in model_to_use
                 )
 
                 if supports_caching:
