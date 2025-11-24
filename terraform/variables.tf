@@ -16,6 +16,12 @@ variable "aws_region" {
   default     = "us-west-2"
 }
 
+variable "admin_password" {
+  description = "Admin dashboard password - must be set via environment variable or tfvars"
+  type        = string
+  sensitive   = true
+}
+
 variable "domain_name" {
   description = "Domain name for the application (optional)"
   type        = string

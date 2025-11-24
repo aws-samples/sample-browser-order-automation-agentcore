@@ -314,6 +314,28 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Authentication middleware
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    """Verify JWT token for all requests except public endpoints"""
+    # Skip auth for public endpoints
+    public_paths = ["/api/login", "/health", "/api/health", "/favicon.ico", "/", "/docs", "/openapi.json", "/redoc"]
+    
+    if request.url.path in public_paths or request.url.path.startswith("/api/screenshots"):
+        return await call_next(request)
+    
+    # Verify token
+    try:
+        await verify_token(request)
+    except HTTPException as e:
+        return JSONResponse(
+            status_code=e.status_code,
+            content={"detail": e.detail}
+        )
+    
+    return await call_next(request)
+
+
 # CORS middleware - configure based on environment
 allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")
 app.add_middleware(
@@ -344,6 +366,91 @@ async def broadcast_update(data: Dict[str, Any]):
 
 
 # API Routes
+
+
+import jwt
+from datetime import timedelta
+
+# JWT Configuration
+JWT_SECRET = os.getenv("JWT_SECRET", os.urandom(32).hex())
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRATION_HOURS = 730  # Token expires after 730 hours
+
+
+def create_jwt_token(data: dict, expires_delta: timedelta = None) -> str:
+    """Create JWT token with expiration"""
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.now(timezone.utc) + expires_delta
+    else:
+        expire = datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRATION_HOURS)
+    
+    to_encode.update({"exp": expire, "iat": datetime.now(timezone.utc)})
+    encoded_jwt = jwt.encode(to_encode, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    return encoded_jwt
+
+
+def verify_jwt_token(token: str) -> dict:
+    """Verify JWT token and return payload"""
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        return payload
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+
+@app.post("/api/login")
+async def admin_login(request: Dict[str, Any]):
+    """Admin login endpoint with JWT"""
+    try:
+        password = request.get("password")
+        admin_password = os.getenv("ADMIN_PASSWORD")
+        
+        if not admin_password:
+            logger.error("ADMIN_PASSWORD environment variable not set")
+            raise HTTPException(status_code=500, detail="Authentication not configured")
+        
+        if not password:
+            raise HTTPException(status_code=400, detail="Password required")
+        
+        if password == admin_password:
+            # Generate JWT token
+            token = create_jwt_token({"sub": "admin", "type": "access"})
+            logger.info("Admin login successful")
+            return {
+                "success": True,
+                "token": token,
+                "message": "Login successful",
+                "expires_in": JWT_EXPIRATION_HOURS * 3600  # seconds
+            }
+        else:
+            logger.warning("Failed login attempt")
+            raise HTTPException(status_code=401, detail="Invalid password")
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Login error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def verify_token(request: Request):
+    """Verify JWT authentication token"""
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
+    token = auth_header.replace("Bearer ", "")
+    
+    # Verify JWT token
+    payload = verify_jwt_token(token)
+    
+    # Attach user info to request state
+    request.state.user = payload
+    
+    return True
 
 
 @app.get("/")
@@ -407,7 +514,7 @@ async def api_health_check():
 
 # Order Management
 @app.post("/api/orders")
-async def create_order(request: CreateOrderRequest, background_tasks: BackgroundTasks):
+async def create_order(request: CreateOrderRequest, background_tasks: BackgroundTasks, req: Request = None):
     """Create a new order"""
     try:
         logger.info(

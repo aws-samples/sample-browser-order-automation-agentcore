@@ -26,6 +26,7 @@ import OrderDetails from './pages/OrderDetails';
 import CreateOrder from './pages/CreateOrder';
 import BatchUpload from './pages/BatchUpload';
 import SecretVault from './pages/SecretVault';
+import LoginPage from './pages/LoginPage';
 // MockShop removed - using static HTML files
 
 function AppContent() {
@@ -36,6 +37,14 @@ function AppContent() {
   const appLayout = useRef();
   const location = useLocation();
   const navigate = useNavigate();
+
+  // Check authentication
+  useEffect(() => {
+    const token = sessionStorage.getItem('admin_token');
+    if (!token && location.pathname !== '/login') {
+      navigate('/login');
+    }
+  }, [location, navigate]);
 
   // Get active nav item from current path
   const getActiveNavItem = () => {
@@ -528,7 +537,7 @@ function App() {
   return (
     <Router>
       <Routes>
-        <Route path="/shop" element={<div>Redirecting to shop...</div>} />
+        <Route path="/login" element={<LoginPage />} />
         <Route path="*" element={<AppContent />} />
       </Routes>
     </Router>

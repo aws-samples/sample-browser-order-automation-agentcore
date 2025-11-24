@@ -14,6 +14,7 @@ import {
   ExpandableSection
 } from '@cloudscape-design/components';
 import ModelSelector from '../components/ModelSelector';
+import { apiService } from '../services/api';
 
 const CreateOrder = ({ addNotification }) => {
   const navigate = useNavigate();
@@ -60,11 +61,8 @@ const CreateOrder = ({ addNotification }) => {
   const fetchRetailerUrls = useCallback(async () => {
     try {
       setLoadingRetailers(true);
-      const response = await fetch('/api/config/retailer-urls');
-      if (response.ok) {
-        const data = await response.json();
-        setRetailerUrls(data.retailer_urls || []);
-      }
+      const data = await apiService.request('/api/config/retailer-urls');
+      setRetailerUrls(data.retailer_urls || []);
     } catch (error) {
       console.error('Failed to fetch retailer URLs:', error);
       addNotification({
@@ -79,15 +77,11 @@ const CreateOrder = ({ addNotification }) => {
 
   const fetchSecrets = useCallback(async () => {
     try {
-      const response = await fetch('/api/secrets');
-      if (response.ok) {
-        const data = await response.json();
-        setSecrets(data.secrets || []);
-      } else {
-        console.warn('Failed to fetch secrets, using empty array');
-        setSecrets([]);
-      }
+      const data = await apiService.request('/api/secrets');
+      setSecrets(data.secrets || []);
     } catch (error) {
+      console.warn('Failed to fetch secrets, using empty array');
+      setSecrets([]);
       console.error('Failed to fetch secrets:', error);
       setSecrets([]); // Set empty array on error
     }
@@ -105,10 +99,7 @@ const CreateOrder = ({ addNotification }) => {
       
       try {
         setLoadingOrder(true);
-        const response = await fetch(`/api/orders/${orderId}`);
-        if (!response.ok) throw new Error('Failed to load order');
-        
-        const order = await response.json();
+        const order = await apiService.getOrder(orderId);
         
         // Helper function to filter out dash values
         const filterDash = (value) => (value === '-' ? '' : value || '');
@@ -220,15 +211,10 @@ const CreateOrder = ({ addNotification }) => {
           }
         };
 
-        const response = await fetch(`/api/orders/${orderId}/edit`, {
+        await apiService.request(`/api/orders/${orderId}/edit`, {
           method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(updateData)
         });
-
-        if (!response.ok) {
-          throw new Error('Failed to update order');
-        }
 
         addNotification({
           type: 'success',
@@ -268,17 +254,7 @@ const CreateOrder = ({ addNotification }) => {
           instructions: formData.instructions || undefined
         };
 
-        const response = await fetch('/api/orders', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(orderData)
-        });
-
-        if (!response.ok) {
-          throw new Error('Failed to create order');
-        }
-
-        const result = await response.json();
+        const result = await apiService.createOrder(orderData, formData.automation_method);
 
         addNotification({
           type: 'success',

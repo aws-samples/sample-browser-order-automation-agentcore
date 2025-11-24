@@ -13,6 +13,7 @@ import {
 } from '@cloudscape-design/components';
 
 import ModelSelector from './ModelSelector';
+import { apiService } from '../services/api';
 
 const CreateOrderWizard = ({ visible, onDismiss, onSubmit, addNotification }) => {
   const [activeStepIndex, setActiveStepIndex] = useState(0);
@@ -58,11 +59,8 @@ const CreateOrderWizard = ({ visible, onDismiss, onSubmit, addNotification }) =>
   const fetchRetailers = useCallback(async () => {
     try {
       setLoading(true);
-      const response = await fetch('/api/config/retailers');
-      if (response.ok) {
-        const data = await response.json();
-        setRetailers(data.retailer_configs || {});
-      }
+      const data = await apiService.getRetailerConfig();
+      setRetailers(data.retailer_configs || {});
     } catch (error) {
       console.error('Failed to fetch retailers:', error);
       addNotification({
@@ -172,20 +170,7 @@ const CreateOrderWizard = ({ visible, onDismiss, onSubmit, addNotification }) =>
 
     setSubmitting(true);
     try {
-      const response = await fetch('/api/orders', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(formData)
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || 'Failed to create order');
-      }
-
-      const result = await response.json();
+      const result = await apiService.createOrder(formData, formData.automation_method);
       
       addNotification({
         type: 'success',

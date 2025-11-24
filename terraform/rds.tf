@@ -53,6 +53,16 @@ resource "random_password" "db_password" {
   }
 }
 
+# Random secret for JWT signing
+resource "random_password" "jwt_secret" {
+  length  = 64
+  special = false  # Hex string for JWT secret
+  
+  lifecycle {
+    ignore_changes = all
+  }
+}
+
 # RDS Instance
 resource "aws_db_instance" "main" {
   identifier = "${var.project_name}-db"

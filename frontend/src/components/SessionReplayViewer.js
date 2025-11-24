@@ -10,6 +10,7 @@ import {
   Alert,
   KeyValuePairs
 } from '@cloudscape-design/components';
+import { apiService } from '../services/api';
 
 const SessionReplayViewer = ({ order, isVisible, onClose }) => {
   const [replayInfo, setReplayInfo] = useState(null);
@@ -25,19 +26,13 @@ const SessionReplayViewer = ({ order, isVisible, onClose }) => {
     
     try {
       // Try the new detailed status endpoint first
-      let response = await fetch(`/api/orders/${order.id}/session-replay/status`);
-      
-      if (!response.ok) {
+      let data;
+      try {
+        data = await apiService.request(`/api/orders/${order.id}/session-replay/status`);
+      } catch (err) {
         // Fallback to the original endpoint
-        response = await fetch(`/api/orders/${order.id}/session-replay`);
-        
-        if (!response.ok) {
-          const errorData = await response.json();
-          throw new Error(errorData.detail || 'Session replay not available');
-        }
+        data = await apiService.request(`/api/orders/${order.id}/session-replay`);
       }
-      
-      const data = await response.json();
       
       if (!data.replay_available) {
         throw new Error(data.reason || 'Session replay not available for this order');

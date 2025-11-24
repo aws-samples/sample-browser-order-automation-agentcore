@@ -26,6 +26,14 @@ cleanup() {
 # Set trap to cleanup on script exit
 trap cleanup SIGINT SIGTERM EXIT
 
+# Load environment variables from .env file
+if [ -f ".env" ]; then
+    echo "📝 Loading environment variables from .env"
+    export $(grep -v '^#' .env | xargs)
+else
+    echo "⚠️  Warning: .env file not found. Using default configuration."
+fi
+
 # Check if Node.js is available
 if ! command -v node >/dev/null 2>&1; then
     echo "❌ Node.js not found. Please install Node.js first."
@@ -110,6 +118,13 @@ echo "🌐 Server URLs:"
 echo "   Backend API: http://localhost:8000"
 echo "   Frontend: http://localhost:3000"
 echo "   Settings: http://localhost:3000/settings"
+echo ""
+echo "🔐 Admin Credentials:"
+if [ -n "$ADMIN_PASSWORD" ]; then
+    echo "   Password: $ADMIN_PASSWORD"
+else
+    echo "   Password: (not set - check .env file)"
+fi
 echo ""
 echo "📋 Log Files:"
 echo "   Backend: logs/backend.log"

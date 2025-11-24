@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { wsService } from '../services/api';
+import { wsService, apiService } from '../services/api';
 import {
   Header,
   SpaceBetween,
@@ -70,12 +70,9 @@ const OrderDetails = ({ addNotification }) => {
   // Separate function to check live view availability
   const checkLiveViewAvailability = useCallback(async () => {
     try {
-      const liveViewResponse = await fetch(`/api/orders/${orderId}/live-view`);
-      if (liveViewResponse.ok) {
-        const liveViewData = await liveViewResponse.json();
-        setLiveViewAvailable(liveViewData.live_view_available || false);
-        setSessionTimeoutRemaining(liveViewData.session_timeout_remaining || null);
-      }
+      const liveViewData = await apiService.getLiveViewUrl(orderId);
+      setLiveViewAvailable(liveViewData.live_view_available || false);
+      setSessionTimeoutRemaining(liveViewData.session_timeout_remaining || null);
     } catch (liveViewError) {
       console.warn('Failed to check live view availability:', liveViewError);
       setLiveViewAvailable(false);
@@ -85,18 +82,8 @@ const OrderDetails = ({ addNotification }) => {
   const fetchOrder = useCallback(async () => {
     try {
       setError(null);
-      const response = await fetch(`/api/orders/${orderId}`);
-
-      if (!response.ok) {
-        if (response.status === 404) {
-          setOrder(null);
-          setLoading(false);
-          return;
-        }
-        throw new Error('Failed to fetch order');
-      }
-
-      const orderData = await response.json();
+      const orderData = await apiService.getOrder(orderId);
+      
       const prevLogsCount = order?.execution_logs?.length || 0;
       const newLogsCount = orderData?.execution_logs?.length || 0;
 
@@ -210,11 +197,7 @@ const OrderDetails = ({ addNotification }) => {
 
   const handleCancelOrder = async () => {
     try {
-      const response = await fetch(`/api/orders/${orderId}/cancel`, { method: 'POST' });
-
-      if (!response.ok) {
-        throw new Error('Failed to cancel order');
-      }
+      await apiService.cancelOrder(orderId);
 
       addNotification({
         type: 'success',
@@ -236,13 +219,7 @@ const OrderDetails = ({ addNotification }) => {
   const handleTakeControl = async () => {
     setControlLoading(true);
     try {
-      const response = await fetch(`/api/orders/${orderId}/take-control`, { method: 'POST' });
-
-      if (!response.ok) {
-        throw new Error('Failed to take manual control');
-      }
-
-      const result = await response.json();
+      const result = await apiService.takeManualControl(orderId);
       if (result.success) {
         setManualControlEnabled(true);
         addNotification({
@@ -267,13 +244,7 @@ const OrderDetails = ({ addNotification }) => {
   const handleReleaseControl = async () => {
     setControlLoading(true);
     try {
-      const response = await fetch(`/api/orders/${orderId}/release-control`, { method: 'POST' });
-
-      if (!response.ok) {
-        throw new Error('Failed to release manual control');
-      }
-
-      const result = await response.json();
+      const result = await apiService.releaseManualControl(orderId);
       if (result.success) {
         setManualControlEnabled(false);
         addNotification({
@@ -824,30 +795,20 @@ const OrderDetails = ({ addNotification }) => {
                 iconName="download"
                 onClick={async () => {
                   try {
-                    const response = await fetch(`/api/orders/${orderId}/nova-act-report`);
-                    if (response.ok) {
-                      const data = await response.json();
-                      if (data.reports && data.reports.length > 0) {
-                        const report = data.reports[0];
-                        window.open(report.download_url, '_blank');
-                        addNotification({
-                          type: 'success',
-                          header: 'Nova Act Report',
-                          content: `Downloading ${report.filename}`
-                        });
-                      } else {
-                        addNotification({
-                          type: 'info',
-                          header: 'No Reports Available',
-                          content: 'Nova Act report not yet available'
-                        });
-                      }
-                    } else {
-                      const error = await response.json();
+                    const data = await apiService.request(`/api/orders/${orderId}/nova-act-report`);
+                    if (data.reports && data.reports.length > 0) {
+                      const report = data.reports[0];
+                      window.open(report.download_url, '_blank');
                       addNotification({
-                        type: 'warning',
-                        header: 'Report Not Available',
-                        content: error.detail || 'Nova Act report not found'
+                        type: 'success',
+                        header: 'Nova Act Report',
+                        content: `Downloading ${report.filename}`
+                      });
+                    } else {
+                      addNotification({
+                        type: 'info',
+                        header: 'No Reports Available',
+                        content: 'Nova Act report not yet available'
                       });
                     }
                   } catch (error) {
@@ -885,16 +846,9 @@ const OrderDetails = ({ addNotification }) => {
                 iconName="redo"
                 onClick={async () => {
                   try {
-                    const response = await fetch(`/api/orders/${orderId}/retry`, {
+                    const result = await apiService.request(`/api/orders/${orderId}/retry`, {
                       method: 'POST'
                     });
-                    
-                    if (!response.ok) {
-                      const errorData = await response.json().catch(() => ({}));
-                      throw new Error(errorData.detail || errorData.message || 'Failed to retry order');
-                    }
-                    
-                    const result = await response.json();
                     
                     addNotification({
                       type: 'success',

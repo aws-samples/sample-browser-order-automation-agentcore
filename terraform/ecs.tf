@@ -139,6 +139,14 @@ resource "aws_ecs_task_definition" "app" {
         {
           name  = "PYTHONUNBUFFERED"
           value = "1"
+        },
+        {
+          name  = "ADMIN_PASSWORD"
+          value = var.admin_password
+        },
+        {
+          name  = "JWT_SECRET"
+          value = random_password.jwt_secret.result
         }
       ]
 

@@ -13,6 +13,7 @@ import {
   Box,
   TextContent
 } from '@cloudscape-design/components';
+import { apiService } from '../services/api';
 
 const SecretVault = ({ addNotification }) => {
   const [secrets, setSecrets] = useState([]);
@@ -34,12 +35,7 @@ const SecretVault = ({ addNotification }) => {
   const fetchSecrets = useCallback(async () => {
     try {
       setLoading(true);
-      const response = await fetch('/api/secrets');
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Failed to fetch secrets: ${response.status} ${errorText}`);
-      }
-      const data = await response.json();
+      const data = await apiService.request('/api/secrets');
       setSecrets(data.secrets || []);
     } catch (error) {
       console.error('Failed to fetch secrets:', error);
@@ -83,17 +79,10 @@ const SecretVault = ({ addNotification }) => {
     if (!validateForm()) return;
 
     try {
-      const response = await fetch('/api/secrets', {
+      await apiService.request('/api/secrets', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
         body: JSON.stringify(formData),
       });
-
-      if (!response.ok) {
-        throw new Error('Failed to create secret');
-      }
 
       addNotification({
         type: 'success',
@@ -123,17 +112,10 @@ const SecretVault = ({ addNotification }) => {
     if (!validateForm()) return;
 
     try {
-      const response = await fetch(`/api/secrets/${editingSecret.id}`, {
+      await apiService.request(`/api/secrets/${editingSecret.id}`, {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
         body: JSON.stringify(formData),
       });
-
-      if (!response.ok) {
-        throw new Error('Failed to update secret');
-      }
 
       addNotification({
         type: 'success',
@@ -156,7 +138,7 @@ const SecretVault = ({ addNotification }) => {
   const handleDelete = async () => {
     try {
       const promises = selectedItems.map(item =>
-        fetch(`/api/secrets/${item.id}`, { method: 'DELETE' })
+        apiService.request(`/api/secrets/${item.id}`, { method: 'DELETE' })
       );
 
       await Promise.all(promises);

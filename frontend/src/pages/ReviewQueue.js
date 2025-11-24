@@ -12,6 +12,7 @@ import {
   Link,
   Alert
 } from '@cloudscape-design/components';
+import { apiService } from '../services/api';
 
 const ReviewQueue = ({ addNotification }) => {
   const [reviewItems, setReviewItems] = useState([]);
@@ -37,11 +38,7 @@ const ReviewQueue = ({ addNotification }) => {
     }
 
     try {
-      const response = await fetch('/api/review/queue');
-      if (!response.ok) {
-        throw new Error('Failed to fetch review queue');
-      }
-      const data = await response.json();
+      const data = await apiService.request('/api/review/queue');
       const newReviewItems = data.orders || [];
       setReviewItems(newReviewItems);
 
@@ -140,11 +137,8 @@ const ReviewQueue = ({ addNotification }) => {
     setCompletingReviews(true);
     try {
       const promises = selectedItems.map(item =>
-        fetch(`/api/review/${item.id}/resolve`, {
+        apiService.request(`/api/review/${item.id}/resolve`, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
           body: JSON.stringify({
             status: 'completed',
             human_review_notes: 'Bulk completed via review queue'

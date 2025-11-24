@@ -13,6 +13,7 @@ import {
   Modal,
   Toggle,
 } from '@cloudscape-design/components';
+import { apiService } from '../services/api';
 
 const Settings = ({ addNotification }) => {
   const [loading, setLoading] = useState(true);
@@ -45,14 +46,11 @@ const Settings = ({ addNotification }) => {
       setLoading(true);
 
       // Only load system config (fast)
-      const configResponse = await fetch('/api/settings/config');
-      if (configResponse.ok) {
-        const configData = await configResponse.json();
-        const config = configData.config || {};
-        setSystemConfig(config);
-        setOriginalConfig(config);
-        setHasChanges(false);
-      }
+      const configData = await apiService.request('/api/settings/config');
+      const config = configData.config || {};
+      setSystemConfig(config);
+      setOriginalConfig(config);
+      setHasChanges(false);
 
     } catch (error) {
       console.error('Failed to load settings:', error);
@@ -71,19 +69,12 @@ const Settings = ({ addNotification }) => {
 
     try {
       setIamLoading(true);
-      const response = await fetch('/api/settings/aws/search-iam-roles');
+      const data = await apiService.request('/api/settings/aws/search-iam-roles');
 
-      if (response.ok) {
-        const data = await response.json();
-
-        setAwsStatus(prev => ({
-          ...prev,
-          execution_roles: data.execution_roles || []
-        }));
-      } else {
-        await response.text();
-        throw new Error('Failed to load IAM roles');
-      }
+      setAwsStatus(prev => ({
+        ...prev,
+        execution_roles: data.execution_roles || []
+      }));
 
       setIamLoaded(true);
     } catch (error) {
@@ -103,19 +94,12 @@ const Settings = ({ addNotification }) => {
 
     try {
       setS3Loading(true);
-      const response = await fetch('/api/settings/aws/search-s3-buckets');
+      const data = await apiService.request('/api/settings/aws/search-s3-buckets');
 
-      if (response.ok) {
-        const data = await response.json();
-
-        setAwsStatus(prev => ({
-          ...prev,
-          s3_buckets: data.s3_buckets || []
-        }));
-      } else {
-        await response.text();
-        throw new Error('Failed to load S3 buckets');
-      }
+      setAwsStatus(prev => ({
+        ...prev,
+        s3_buckets: data.s3_buckets || []
+      }));
 
       setS3Loaded(true);
     } catch (error) {
@@ -133,11 +117,8 @@ const Settings = ({ addNotification }) => {
   const loadRetailerUrls = useCallback(async () => {
     try {
       setUrlsLoading(true);
-      const response = await fetch('/api/config/retailer-urls');
-      if (response.ok) {
-        const data = await response.json();
-        setRetailerUrls(data.retailer_urls || []);
-      }
+      const data = await apiService.request('/api/config/retailer-urls');
+      setRetailerUrls(data.retailer_urls || []);
     } catch (error) {
       console.error('Failed to load retailer URLs:', error);
       addNotification({
@@ -155,25 +136,20 @@ const Settings = ({ addNotification }) => {
       const method = editingUrl ? 'PUT' : 'POST';
       const url = editingUrl ? `/api/config/retailer-urls/${editingUrl.id}` : '/api/config/retailer-urls';
       
-      const response = await fetch(url, {
+      await apiService.request(url, {
         method,
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(urlFormData)
       });
 
-      if (response.ok) {
-        addNotification({
-          type: 'success',
-          header: editingUrl ? 'URL Updated' : 'URL Added',
-          content: `Retailer URL has been ${editingUrl ? 'updated' : 'added'} successfully`
-        });
-        setShowUrlModal(false);
-        setEditingUrl(null);
-        setUrlFormData({ retailer: '', website_name: '', starting_url: '', is_default: false });
-        loadRetailerUrls();
-      } else {
-        throw new Error('Failed to save URL');
-      }
+      addNotification({
+        type: 'success',
+        header: editingUrl ? 'URL Updated' : 'URL Added',
+        content: `Retailer URL has been ${editingUrl ? 'updated' : 'added'} successfully`
+      });
+      setShowUrlModal(false);
+      setEditingUrl(null);
+      setUrlFormData({ retailer: '', website_name: '', starting_url: '', is_default: false });
+      loadRetailerUrls();
     } catch (error) {
       addNotification({
         type: 'error',
@@ -185,20 +161,15 @@ const Settings = ({ addNotification }) => {
 
   const handleDeleteUrl = async (urlId) => {
     try {
-      const response = await fetch(`/api/config/retailer-urls/${urlId}`, {
+      await apiService.request(`/api/config/retailer-urls/${urlId}`, {
         method: 'DELETE'
       });
-
-      if (response.ok) {
-        addNotification({
-          type: 'success',
-          header: 'URL Deleted',
-          content: 'Retailer URL has been deleted successfully'
-        });
-        loadRetailerUrls();
-      } else {
-        throw new Error('Failed to delete URL');
-      }
+      addNotification({
+        type: 'success',
+        header: 'URL Deleted',
+        content: 'Retailer URL has been deleted successfully'
+      });
+      loadRetailerUrls();
     } catch (error) {
       addNotification({
         type: 'error',
@@ -266,29 +237,18 @@ const Settings = ({ addNotification }) => {
         return;
       }
 
-      const response = await fetch('/api/settings/config', {
+      const result = await apiService.request('/api/settings/config', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ config: systemConfig })
       });
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`HTTP ${response.status}: ${errorText}`);
-      }
-
-      const result = await response.json();
-
       // Check for success - handle both status field and HTTP success
-      if (response.ok && (result.status === 'success' || !result.status)) {
+      if (result.status === 'success' || !result.status) {
         // 저장 성공 후 DB에서 최신 설정을 다시 로드하여 동기화
-        const configResponse = await fetch('/api/settings/config');
-        if (configResponse.ok) {
-          const configData = await configResponse.json();
-          const updatedConfig = configData.config || {};
-          setSystemConfig(updatedConfig);
-          setOriginalConfig(updatedConfig);
-        }
+        const configData = await apiService.request('/api/settings/config');
+        const updatedConfig = configData.config || {};
+        setSystemConfig(updatedConfig);
+        setOriginalConfig(updatedConfig);
 
         setHasChanges(false);
         setIsEditingApiKey(false); // 저장 후 API 키 편집 상태 해제

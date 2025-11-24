@@ -10,6 +10,7 @@ import {
   Button
 } from '@cloudscape-design/components';
 import '@cloudscape-design/global-styles/index.css';
+import { apiService } from '../services/api';
 
 const LiveBrowserViewer = ({ orderId }) => {
   const [loading, setLoading] = useState(true);
@@ -342,19 +343,7 @@ const LiveBrowserViewer = ({ orderId }) => {
     
     try {
       // Get presigned URL following AWS tutorial pattern
-      const response = await fetch(`/api/orders/${orderId}/presigned-url`);
-      if (!response.ok) {
-        if (response.status === 503) {
-          throw new Error('Live view not available - AgentCore session not active');
-        } else if (response.status === 400) {
-          const errorData = await response.json();
-          throw new Error(errorData.detail || 'Order not in processing state');
-        } else {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
-      }
-      
-      const presignedData = await response.json();
+      const presignedData = await apiService.getPresignedUrl(orderId);
       console.log('Presigned URL response:', presignedData);
       
       // Check for errors
@@ -534,17 +523,11 @@ const LiveBrowserViewer = ({ orderId }) => {
                   if (isConnectionLimitError) {
                     try {
                       console.log('Attempting to force disconnect existing sessions...');
-                      const disconnectResponse = await fetch(`/api/orders/${orderId}/force-disconnect`, {
-                        method: 'POST'
-                      });
+                      const disconnectData = await apiService.forceDisconnectSession(orderId);
+                      console.log('Force disconnect result:', disconnectData);
                       
-                      if (disconnectResponse.ok) {
-                        const disconnectData = await disconnectResponse.json();
-                        console.log('Force disconnect result:', disconnectData);
-                        
-                        // Wait a moment for cleanup
-                        await new Promise(resolve => setTimeout(resolve, 1000));
-                      }
+                      // Wait a moment for cleanup
+                      await new Promise(resolve => setTimeout(resolve, 1000));
                     } catch (disconnectError) {
                       console.warn('Failed to force disconnect:', disconnectError);
                     }
@@ -633,27 +616,11 @@ const LiveBrowserViewer = ({ orderId }) => {
                         try {
                           // First, change the actual browser resolution via backend API
                           console.log(`[LiveBrowserViewer] Calling backend API to change browser resolution...`);
-                          const response = await fetch(`/api/orders/${orderId}/change-resolution`, {
-                            method: 'POST',
-                            headers: {
-                              'Content-Type': 'application/json'
-                            },
-                            body: JSON.stringify({
-                              width: resolution.width,
-                              height: resolution.height
-                            })
-                          });
+                          const result = await apiService.changeBrowserResolution(orderId, resolution.width, resolution.height);
+                          console.log(`[LiveBrowserViewer] Browser resolution changed successfully:`, result);
                           
-                          if (response.ok) {
-                            const result = await response.json();
-                            console.log(`[LiveBrowserViewer] Browser resolution changed successfully:`, result);
-                            
-                            // Wait a moment for the browser to resize
-                            await new Promise(resolve => setTimeout(resolve, 1000));
-                          } else {
-                            const error = await response.json();
-                            console.warn(`[LiveBrowserViewer] Failed to change browser resolution:`, error);
-                          }
+                          // Wait a moment for the browser to resize
+                          await new Promise(resolve => setTimeout(resolve, 1000));
                         } catch (error) {
                           console.warn(`[LiveBrowserViewer] Error calling resolution API:`, error);
                         }

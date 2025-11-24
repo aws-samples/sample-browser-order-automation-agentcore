@@ -2,14 +2,19 @@
  * API service for Order Automation System
  */
 
-const API_BASE_URL = process.env.REACT_APP_API_BASE || 'http://localhost:8000';
+const API_BASE_URL = process.env.REACT_APP_API_BASE || '';
 
 class APIService {
   async request(endpoint, options = {}) {
     const url = `${API_BASE_URL}${endpoint}`;
+    
+    // Get token from sessionStorage
+    const token = sessionStorage.getItem('admin_token');
+    
     const config = {
       headers: {
         'Content-Type': 'application/json',
+        ...(token && { 'Authorization': `Bearer ${token}` }),
         ...options.headers,
       },
       ...options,
@@ -17,6 +22,13 @@ class APIService {
 
     try {
       const response = await fetch(url, config);
+
+      if (response.status === 401) {
+        // Unauthorized - redirect to login
+        sessionStorage.removeItem('admin_token');
+        window.location.href = '/login';
+        throw new Error('Authentication required');
+      }
 
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);

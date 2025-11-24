@@ -22,6 +22,7 @@ import {
 } from '@cloudscape-design/components';
 
 import CreateOrderWizard from './CreateOrderWizard';
+import { apiService } from '../services/api';
 // import useResizeObserverFix from '../hooks/useResizeObserverFix';
 
 // ResizeObserver errors are handled globally by errorSuppression utility
@@ -54,19 +55,10 @@ const OrderDashboard = ({ addNotification }) => {
     }
 
     try {
-      const [ordersRes, retailersRes, queueRes] = await Promise.all([
-        fetch('/api/orders?limit=500'),
-        fetch('/api/config/retailers'),
-        fetch('/api/queue/status')
+      const [ordersData, retailersData] = await Promise.all([
+        apiService.getOrders(500),
+        apiService.getRetailerConfig()
       ]);
-
-      if (!ordersRes.ok || !retailersRes.ok || !queueRes.ok) {
-        throw new Error('Failed to fetch dashboard data');
-      }
-
-      const ordersData = await ordersRes.json();
-      const retailersData = await retailersRes.json();
-      const queueData = await queueRes.json();
 
       setOrders(Array.isArray(ordersData.orders) ? ordersData.orders : []);
       setRetailers(retailersData);
@@ -153,13 +145,7 @@ const OrderDashboard = ({ addNotification }) => {
 
   const handleDeleteCompleted = async () => {
     try {
-      const response = await fetch('/api/orders/cleanup/completed', { method: 'DELETE' });
-
-      if (!response.ok) {
-        throw new Error('Failed to delete completed orders');
-      }
-
-      const result = await response.json();
+      const result = await apiService.request('/api/orders/cleanup/completed', { method: 'DELETE' });
 
       addNotification({
         type: 'success',
@@ -188,11 +174,7 @@ const OrderDashboard = ({ addNotification }) => {
     }
 
     try {
-      const response = await fetch(`/api/orders/${orderId}/force`, { method: 'DELETE' });
-
-      if (!response.ok) {
-        throw new Error('Failed to delete order');
-      }
+      await apiService.request(`/api/orders/${orderId}/force`, { method: 'DELETE' });
 
       addNotification({
         type: 'success',
@@ -219,17 +201,13 @@ const OrderDashboard = ({ addNotification }) => {
 
   const handleRetryOrder = async (orderId) => {
     try {
-      const response = await fetch(`/api/orders/${orderId}/retry`, { method: 'POST' });
-      if (response.ok) {
-        addNotification({
-          type: 'success',
-          header: 'Order Retry',
-          content: `Order ${orderId.substring(0, 8)} has been queued for retry`
-        });
-        fetchDashboardData();
-      } else {
-        throw new Error('Failed to retry order');
-      }
+      await apiService.request(`/api/orders/${orderId}/retry`, { method: 'POST' });
+      addNotification({
+        type: 'success',
+        header: 'Order Retry',
+        content: `Order ${orderId.substring(0, 8)} has been queued for retry`
+      });
+      fetchDashboardData();
     } catch (error) {
       addNotification({
         type: 'error',
@@ -246,7 +224,7 @@ const OrderDashboard = ({ addNotification }) => {
       const cancelPromises = selectedItems
         .filter(order => order.status === 'pending')
         .map(order =>
-          fetch(`/api/orders/${order.id}/cancel`, { method: 'POST' })
+          apiService.cancelOrder(order.id)
         );
 
       await Promise.all(cancelPromises);
@@ -282,7 +260,7 @@ const OrderDashboard = ({ addNotification }) => {
 
     try {
       const deletePromises = selectedItems.map(order =>
-        fetch(`/api/orders/${order.id}/force`, { method: 'DELETE' })
+        apiService.request(`/api/orders/${order.id}/force`, { method: 'DELETE' })
       );
 
       await Promise.all(deletePromises);

@@ -1,10 +1,14 @@
 # Project Configuration
-project_name = "timecard-processor"
+project_name = "order-automation"
 environment  = "prod"
 aws_region   = "us-west-2"
 
+# Security - REQUIRED: Set admin password for web interface
+# Generate a strong password and set it here or via environment variable TF_VAR_admin_password
+admin_password = "CHANGE_ME_TO_STRONG_PASSWORD"
+
 # Custom domain (ACM certificate will be created automatically)
-# domain_name = "timecard.yourdomain.com"
+# domain_name = "order.yourdomain.com"
 
 # Whether to create ACM certificate automatically
 # create_certificate = true
@@ -14,11 +18,11 @@ vpc_cidr           = "10.0.0.0/16"
 availability_zones = ["us-west-2a", "us-west-2b"]
 
 # ECS Configuration
-ecs_task_cpu      = 1024  # 1 vCPU (increased from 512)
-ecs_task_memory   = 2048  # 2GB RAM (increased from 1024)
-ecs_desired_count = 1     # 1 task (reduced to avoid rate limiting)
+ecs_task_cpu      = 4096  # 4 vCPU for browser automation
+ecs_task_memory   = 8192  # 8GB RAM for browser sessions
+ecs_desired_count = 2     # 2 tasks for availability
 ecs_min_capacity  = 1     # Min 1 task
-ecs_max_capacity  = 10     # Max 3 tasks (reduced from 15)
+ecs_max_capacity  = 5     # Max 5 tasks
 
 # Auto Scaling
 enable_auto_scaling = true
@@ -26,19 +30,18 @@ enable_auto_scaling = true
 # CloudFront Configuration
 cloudfront_price_class = "PriceClass_100"
 
-# Database Configuration - Upgraded for better performance
-db_instance_class           = "db.t3.small"  # Upgraded from micro to small
-db_allocated_storage        = 50             # Increased from 20GB to 50GB
-db_max_allocated_storage    = 200            # Increased from 100GB to 200GB
-db_name                     = "timecard_processor"
-db_username                 = "postgres"
-db_backup_retention_period  = 7
+# Database Configuration
+db_instance_class           = "db.t4g.micro"  # ARM-based, cost-effective
+db_allocated_storage        = 20
+db_max_allocated_storage    = 100
+db_name                     = "order_automation"
+db_username                 = "order_admin"
+db_backup_retention_period  = 14             # 2 weeks retention for compliance
 db_multi_az                 = false
 
 # Tags
 tags = {
-  Project     = "timecard-processor"
-  Environment = "prod"
-  ManagedBy   = "terraform"
-  Owner       = "your-team"
+  Project     = "OrderAutomation"
+  Environment = "Production"
+  ManagedBy   = "Terraform"
 }

@@ -11,6 +11,7 @@ import {
   PropertyFilter,
   Link
 } from '@cloudscape-design/components';
+import { apiService } from '../services/api';
 
 const FailedOrders = ({ addNotification }) => {
   const [failedOrders, setFailedOrders] = useState([]);
@@ -28,11 +29,7 @@ const FailedOrders = ({ addNotification }) => {
 
   const fetchFailedOrders = useCallback(async () => {
     try {
-      const response = await fetch('/api/orders?status=failed&limit=100');
-      if (!response.ok) {
-        throw new Error('Failed to fetch failed orders');
-      }
-      const data = await response.json();
+      const data = await apiService.request('/api/orders?status=failed&limit=100');
       setFailedOrders(data.orders || []);
       setLoading(false);
     } catch (error) {
