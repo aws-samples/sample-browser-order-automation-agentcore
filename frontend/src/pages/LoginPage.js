@@ -7,8 +7,7 @@ import {
   Input, 
   Button, 
   SpaceBetween, 
-  Alert,
-  Box
+  Alert
 } from '@cloudscape-design/components';
 
 const LoginPage = () => {
@@ -32,12 +31,12 @@ const LoginPage = () => {
       const data = await response.json();
 
       if (response.ok && data.success) {
-        sessionStorage.setItem('admin_token', data.token);
+        localStorage.setItem('admin_token', data.token);
         navigate('/');
       } else {
-        setError(data.detail || 'Invalid password');
+        setError(data.detail || data.error || 'Invalid password');
       }
-    } catch (err) {
+    } catch {
       setError('Login failed. Please try again.');
     } finally {
       setLoading(false);
@@ -50,50 +49,50 @@ const LoginPage = () => {
       display: 'flex', 
       alignItems: 'center', 
       justifyContent: 'center',
-      background: '#ffffff'
+      background: '#f1f1f1'
     }}>
-      <Container
-        header={
-          <Header variant="h1">
-            <div style={{ textAlign: 'center' }}>
-              <span>Authentication Required</span>
-            </div>
-          </Header>
-        }
-      >
+      <div style={{ width: '100%', maxWidth: '380px' }}>
         <form onSubmit={handleLogin}>
-          <SpaceBetween size="l">
-            {error && (
-              <Alert 
-                type="error" 
-                dismissible 
-                onDismiss={() => setError('')}
-              >
-                {error}
-              </Alert>
-            )}
-            
-            <FormField label="Password">
-              <Input
-                type="password"
-                value={password}
-                onChange={({ detail }) => setPassword(detail.value)}
-                placeholder="Enter password"
-                autoFocus
-              />
-            </FormField>
+          <Container
+            header={
+              <Header variant="h1" description="Enter your credentials to continue">
+                Admin Login
+              </Header>
+            }
+          >
+            <SpaceBetween size="l">
+              {error && (
+                <Alert 
+                  type="error" 
+                  dismissible 
+                  onDismiss={() => setError('')}
+                >
+                  {error}
+                </Alert>
+              )}
+              
+              <FormField label="Password">
+                <Input
+                  type="password"
+                  value={password}
+                  onChange={({ detail }) => setPassword(detail.value)}
+                  placeholder="Enter admin password"
+                  autoFocus
+                />
+              </FormField>
 
-            <Button 
-              variant="primary" 
-              formAction="submit" 
-              loading={loading}
-              fullWidth
-            >
-              Sign In
-            </Button>
-          </SpaceBetween>
+              <Button 
+                variant="primary" 
+                formAction="submit" 
+                loading={loading}
+                fullWidth
+              >
+                Sign In
+              </Button>
+            </SpaceBetween>
+          </Container>
         </form>
-      </Container>
+      </div>
     </div>
   );
 };

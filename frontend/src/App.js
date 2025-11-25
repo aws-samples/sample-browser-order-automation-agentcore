@@ -40,7 +40,7 @@ function AppContent() {
 
   // Check authentication
   useEffect(() => {
-    const token = sessionStorage.getItem('admin_token');
+    const token = localStorage.getItem('admin_token');
     if (!token && location.pathname !== '/login') {
       navigate('/login');
     }

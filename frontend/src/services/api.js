@@ -8,8 +8,8 @@ class APIService {
   async request(endpoint, options = {}) {
     const url = `${API_BASE_URL}${endpoint}`;
     
-    // Get token from sessionStorage
-    const token = sessionStorage.getItem('admin_token');
+    // Get token from localStorage
+    const token = localStorage.getItem('admin_token');
     
     const config = {
       headers: {
@@ -25,7 +25,7 @@ class APIService {
 
       if (response.status === 401) {
         // Unauthorized - redirect to login
-        sessionStorage.removeItem('admin_token');
+        localStorage.removeItem('admin_token');
         window.location.href = '/login';
         throw new Error('Authentication required');
       }
