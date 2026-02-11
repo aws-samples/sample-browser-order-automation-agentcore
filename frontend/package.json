@@ -10,7 +10,7 @@
     "@cloudscape-design/design-tokens": "^3.0.60",
     "@cloudscape-design/global-styles": "^1.0.45",
     "ajv": "^8.17.1",
-    "axios": "^1.11.0",
+    "axios": "^1.13.5",
     "lodash": "^4.17.21",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
